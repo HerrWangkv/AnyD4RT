@@ -1,0 +1,21 @@
+{
+  "source": "arxiv+openalex",
+  "title": "JOG3R: Towards 3D-Consistent Video Generators",
+  "authors": [
+    "Chun-Hao P. Huang",
+    "Niloy J. Mitra",
+    "Hyeonho Jeong",
+    "Jae Shin Yoon",
+    "Duygu Ceylan"
+  ],
+  "abstract": "Emergent capabilities of image generators have led to many impactful zero- or few-shot applications. Inspired by this success, we investigate whether video generators similarly exhibit 3D-awareness. Using structure-from-motion as a 3D-aware task, we test if intermediate features of a video generator - OpenSora in our case - can support camera pose estimation. Surprisingly, at first, we only find a weak correlation between the two tasks. Deeper investigation reveals that although the video generator produces plausible video frames, the frames themselves are not truly 3D-consistent. Instead, we propose to jointly train for the two tasks, using photometric generation and 3D aware errors. Specifically, we find that SoTA video generation and camera pose estimation (i.e.,DUSt3R [79]) networks share common structures, and propose an architecture that unifies the two. The proposed unified model, named \\nameMethod, produces camera pose estimates with competitive quality while producing 3D-consistent videos. In summary, we propose the first unified video generator that is 3D-consistent, generates realistic video frames, and can potentially be repurposed for other 3D-aware tasks.",
+  "year": 2025,
+  "landing_page": "https://arxiv.org/abs/2501.01409",
+  "pdf_url": "https://arxiv.org/pdf/2501.01409",
+  "arxiv_id": "2501.01409",
+  "venue": "arXiv",
+  "rank": 6,
+  "paper_slug": "2501-01409-2025-jog3r-towards-3d-consistent-video-generators",
+  "local_pdf_path": ".pipeline/literature/generator-verifier-coevolution/papers/2501-01409-2025-jog3r-towards-3d-consistent-video-generators/paper.pdf",
+  "pdf_status": "downloaded"
+}

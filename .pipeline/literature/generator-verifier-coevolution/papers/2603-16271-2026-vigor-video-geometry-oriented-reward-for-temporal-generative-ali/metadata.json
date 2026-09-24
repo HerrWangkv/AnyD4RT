@@ -1,0 +1,20 @@
+{
+  "source": "arxiv+openalex",
+  "title": "VIGOR: VIdeo Geometry-Oriented Reward for Temporal Generative Alignment",
+  "authors": [
+    "Tengjiao Yin",
+    "Jinglei Shi",
+    "Heng Guo",
+    "Xi Wang"
+  ],
+  "abstract": "Video diffusion models lack explicit geometric supervision during training, leading to inconsistency artifacts such as object deformation, spatial drift, and depth violations in generated videos. To address this limitation, we propose a geometry-based reward model that leverages pretrained geometric foundation models to evaluate multi-view consistency through cross-frame reprojection error. Unlike previous geometric metrics that measure inconsistency in pixel space, where pixel intensity may introduce additional noise, our approach conducts error computation in a pointwise fashion, yielding a more physically grounded and robust error metric. Furthermore, we introduce a geometry-aware sampling strategy that filters out low-texture and non-semantic regions, focusing evaluation on geometrically meaningful areas with reliable correspondences to improve robustness. We apply this reward model to align video diffusion models through two complementary pathways: post-training of a bidirectional model via SFT or Reinforcement Learning and inference-time optimization of a Causal Video Model (e.g., Streaming video generator) via test-time scaling with our reward as a path verifier. Experimental results validate the effectiveness of our design, demonstrating that our geometry-based reward provides superior robustness compared to other variants. By enabling efficient inference-time scaling, our method offers a practical solution for enhancing open-source video models without requiring extensive computational resources for retraining.",
+  "year": 2026,
+  "landing_page": "https://arxiv.org/abs/2603.16271",
+  "pdf_url": "https://arxiv.org/pdf/2603.16271",
+  "arxiv_id": "2603.16271",
+  "venue": "arXiv",
+  "rank": 8,
+  "paper_slug": "2603-16271-2026-vigor-video-geometry-oriented-reward-for-temporal-generative-ali",
+  "local_pdf_path": ".pipeline/literature/generator-verifier-coevolution/papers/2603-16271-2026-vigor-video-geometry-oriented-reward-for-temporal-generative-ali/paper.pdf",
+  "pdf_status": "downloaded"
+}

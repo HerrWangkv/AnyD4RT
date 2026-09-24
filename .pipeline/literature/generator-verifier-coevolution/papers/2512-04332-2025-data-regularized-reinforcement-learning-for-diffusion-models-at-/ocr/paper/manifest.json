@@ -1,0 +1,12 @@
+{
+  "input_path": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2512-04332-2025-data-regularized-reinforcement-learning-for-diffusion-models-at-/paper.pdf",
+  "output_dir": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2512-04332-2025-data-regularized-reinforcement-learning-for-diffusion-models-at-/ocr/paper",
+  "backend": "pdfminer",
+  "documents": [
+    {
+      "markdown_path": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2512-04332-2025-data-regularized-reinforcement-learning-for-diffusion-models-at-/ocr/paper/doc_0.md",
+      "markdown_image_paths": [],
+      "output_image_paths": []
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "source": "arxiv+openalex",
+  "title": "SPARK: Synergistic Policy And Reward Co-Evolving Framework",
+  "authors": [
+    "Liu, Ziyu",
+    "Yuhang Zang",
+    "Ding, Shengyuan",
+    "Yuhang Cao",
+    "Xiaoyi Dong",
+    "Haodong Duan",
+    "Dahua Lin",
+    "Jiaqi Wang"
+  ],
+  "abstract": "Recent Large Language Models (LLMs) and Large Vision-Language Models (LVLMs) increasingly use Reinforcement Learning (RL) for post-pretraining, such as RL with Verifiable Rewards (RLVR) for objective tasks and RL from Human Feedback (RLHF) for subjective tasks. However, RLHF incurs high costs and potential reward-policy mismatch due to reliance on human preferences, while RLVR still wastes supervision by discarding rollouts and correctness signals after each update. To address these challenges, we introduce the Synergistic Policy And Reward Co-Evolving Framework (SPARK), an efficient, on-policy, and stable method that builds on RLVR. Instead of discarding rollouts and correctness data, SPARK recycles this valuable information to simultaneously train the model itself as a generative reward model. This auxiliary training uses a mix of objectives, such as pointwise reward score, pairwise comparison, and evaluation conditioned on further-reflection responses, to teach the model to evaluate and improve its own responses. Our process eliminates the need for a separate reward model and costly human preference data. SPARK creates a positive co-evolving feedback loop: improved reward accuracy yields better policy gradients, which in turn produce higher-quality rollouts that further refine the reward model. Our unified framework supports test-time scaling via self-reflection without external reward models and their associated costs. We show that SPARK achieves significant performance gains on multiple LLM and LVLM models and multiple reasoning, reward models, and general benchmarks. For example, SPARK-VL-7B achieves an average 9.7% gain on 7 reasoning benchmarks, 12.1% on 2 reward benchmarks, and 1.5% on 8 general benchmarks over the baselines, demonstrating robustness and broad generalization.",
+  "year": 2025,
+  "landing_page": "https://arxiv.org/abs/2509.22624",
+  "pdf_url": "https://arxiv.org/pdf/2509.22624",
+  "arxiv_id": "2509.22624",
+  "venue": "arXiv",
+  "rank": 2,
+  "paper_slug": "2509-22624-2025-spark-synergistic-policy-and-reward-co-evolving-framework",
+  "local_pdf_path": ".pipeline/literature/generator-verifier-coevolution/papers/2509-22624-2025-spark-synergistic-policy-and-reward-co-evolving-framework/paper.pdf",
+  "pdf_status": "downloaded"
+}

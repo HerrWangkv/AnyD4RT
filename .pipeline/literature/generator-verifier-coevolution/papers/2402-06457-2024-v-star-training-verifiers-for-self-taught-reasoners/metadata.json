@@ -1,0 +1,22 @@
+{
+  "source": "arxiv+openalex",
+  "title": "V-STaR: Training Verifiers for Self-Taught Reasoners",
+  "authors": [
+    "Arian Hosseini",
+    "Xingdi Yuan",
+    "Nikolay Malkin",
+    "Aaron C. Courville",
+    "Alessandro Sordoni",
+    "Rishabh Agarwal"
+  ],
+  "abstract": "Common self-improvement approaches for large language models (LLMs), such as STaR, iteratively fine-tune LLMs on self-generated solutions to improve their problem-solving ability. However, these approaches discard the large amounts of incorrect solutions generated during this process, potentially neglecting valuable information in such solutions. To address this shortcoming, we propose V-STaR that utilizes both the correct and incorrect solutions generated during the self-improvement process to train a verifier using DPO that judges correctness of model-generated solutions. This verifier is used at inference time to select one solution among many candidate solutions. Running V-STaR for multiple iterations results in progressively better reasoners and verifiers, delivering a 4% to 17% test accuracy improvement over existing self-improvement and verification approaches on common code generation and math reasoning benchmarks with LLaMA2 models.",
+  "year": 2024,
+  "landing_page": "https://arxiv.org/abs/2402.06457",
+  "pdf_url": "https://arxiv.org/pdf/2402.06457",
+  "arxiv_id": "2402.06457",
+  "venue": "arXiv",
+  "rank": 7,
+  "paper_slug": "2402-06457-2024-v-star-training-verifiers-for-self-taught-reasoners",
+  "local_pdf_path": ".pipeline/literature/generator-verifier-coevolution/papers/2402-06457-2024-v-star-training-verifiers-for-self-taught-reasoners/paper.pdf",
+  "pdf_status": "downloaded"
+}

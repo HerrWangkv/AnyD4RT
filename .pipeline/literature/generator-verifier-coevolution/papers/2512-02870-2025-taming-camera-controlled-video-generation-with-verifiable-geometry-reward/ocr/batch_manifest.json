@@ -1,0 +1,17 @@
+{
+  "converted_files": 1,
+  "items": [
+    {
+      "input_path": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2512-02870-na-2512-02870/paper.pdf",
+      "output_dir": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2512-02870-na-2512-02870/ocr/paper",
+      "backend": "pdfminer",
+      "documents": [
+        {
+          "markdown_path": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2512-02870-na-2512-02870/ocr/paper/doc_0.md",
+          "markdown_image_paths": [],
+          "output_image_paths": []
+        }
+      ]
+    }
+  ]
+}

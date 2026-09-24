@@ -1,0 +1,12 @@
+{
+  "input_path": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2312-08935-2023-math-shepherd-verify-and-reinforce-llms-step-by-step-without-hum/paper.pdf",
+  "output_dir": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2312-08935-2023-math-shepherd-verify-and-reinforce-llms-step-by-step-without-hum/ocr/paper",
+  "backend": "pdfminer",
+  "documents": [
+    {
+      "markdown_path": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2312-08935-2023-math-shepherd-verify-and-reinforce-llms-step-by-step-without-hum/ocr/paper/doc_0.md",
+      "markdown_image_paths": [],
+      "output_image_paths": []
+    }
+  ]
+}

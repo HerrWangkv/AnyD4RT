@@ -1,0 +1,24 @@
+{
+  "source": "arxiv+openalex",
+  "title": "Meta-Rewarding Language Models: Self-Improving Alignment with LLM-as-a-Meta-Judge",
+  "authors": [
+    "Tianhao Wu",
+    "Weizhe Yuan",
+    "Olga Golovneva",
+    "Jing Xu",
+    "Yuandong Tian",
+    "Jiantao Jiao",
+    "Jason Weston",
+    "Sainbayar Sukhbaatar"
+  ],
+  "abstract": "Large Language Models (LLMs) are rapidly surpassing human knowledge in many domains. While improving these models traditionally relies on costly human data, recent self-rewarding mechanisms (Yuan et al., 2024) have shown that LLMs can improve by judging their own responses instead of relying on human labelers. However, existing methods have primarily focused on improving model responses rather than judgment capabilities, resulting in rapid saturation during iterative training. To address this issue, we introduce a novel Meta-Rewarding step to the self-improvement process, where the model judges its own judgements and uses that feedback to refine its judgment skills. Surprisingly, this unsupervised approach improves the model's ability to judge {\\em and} follow instructions, as demonstrated by a win rate improvement of Llama-3-8B-Instruct from 22.9% to 39.4% on AlpacaEval 2, and 20.6% to 29.1% on Arena-Hard. These results strongly suggest the potential for self-improving models without human supervision.",
+  "year": 2024,
+  "landing_page": "https://arxiv.org/abs/2407.19594",
+  "pdf_url": "https://arxiv.org/pdf/2407.19594",
+  "arxiv_id": "2407.19594",
+  "venue": "arXiv",
+  "rank": 3,
+  "paper_slug": "2407-19594-2024-meta-rewarding-language-models-self-improving-alignment-with-llm",
+  "local_pdf_path": ".pipeline/literature/generator-verifier-coevolution/papers/2407-19594-2024-meta-rewarding-language-models-self-improving-alignment-with-llm/paper.pdf",
+  "pdf_status": "downloaded"
+}

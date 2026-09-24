@@ -1,0 +1,26 @@
+{
+  "source": "arxiv+openalex",
+  "title": "GARDO: Reinforcing Diffusion Models without Reward Hacking",
+  "authors": [
+    "Haoran He",
+    "Yuxiao Ye",
+    "Jie Liu",
+    "Jiajun Liang",
+    "Zhiyong Wang",
+    "Ziyang Yuan",
+    "Xintao Wang",
+    "Hangyu Mao",
+    "Pengfei Wan",
+    "Ling Pan"
+  ],
+  "abstract": "Fine-tuning diffusion models via online reinforcement learning (RL) has shown great potential for enhancing text-to-image alignment. However, since precisely specifying a ground-truth objective for visual tasks remains challenging, the models are often optimized using a proxy reward that only partially captures the true goal. This mismatch often leads to reward hacking, where proxy scores increase while real image quality deteriorates and generation diversity collapses. While common solutions add regularization against the reference policy to prevent reward hacking, they compromise sample efficiency and impede the exploration of novel, high-reward regions, as the reference policy is usually sub-optimal. To address the competing demands of sample efficiency, effective exploration, and mitigation of reward hacking, we propose Gated and Adaptive Regularization with Diversity-aware Optimization (GARDO), a versatile framework compatible with various RL algorithms. Our key insight is that regularization need not be applied universally; instead, it is highly effective to selectively penalize a subset of samples that exhibit high uncertainty. To address the exploration challenge, GARDO introduces an adaptive regularization mechanism wherein the reference model is periodically updated to match the capabilities of the online policy, ensuring a relevant regularization target. To address the mode collapse issue in RL, GARDO amplifies the rewards for high-quality samples that also exhibit high diversity, encouraging mode coverage without destabilizing the optimization process. Extensive experiments across diverse proxy rewards and hold-out unseen metrics consistently show that GARDO mitigates reward hacking and enhances generation diversity without sacrificing sample efficiency or exploration, highlighting its effectiveness and robustness.",
+  "year": 2025,
+  "landing_page": "https://arxiv.org/abs/2512.24138",
+  "pdf_url": "https://arxiv.org/pdf/2512.24138",
+  "arxiv_id": "2512.24138",
+  "venue": "arXiv",
+  "rank": 9,
+  "paper_slug": "2512-24138-2025-gardo-reinforcing-diffusion-models-without-reward-hacking",
+  "local_pdf_path": ".pipeline/literature/generator-verifier-coevolution/papers/2512-24138-2025-gardo-reinforcing-diffusion-models-without-reward-hacking/paper.pdf",
+  "pdf_status": "downloaded"
+}

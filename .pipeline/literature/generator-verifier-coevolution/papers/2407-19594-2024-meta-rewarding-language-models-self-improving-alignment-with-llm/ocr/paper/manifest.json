@@ -1,0 +1,12 @@
+{
+  "input_path": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2407-19594-2024-meta-rewarding-language-models-self-improving-alignment-with-llm/paper.pdf",
+  "output_dir": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2407-19594-2024-meta-rewarding-language-models-self-improving-alignment-with-llm/ocr/paper",
+  "backend": "pdfminer",
+  "documents": [
+    {
+      "markdown_path": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2407-19594-2024-meta-rewarding-language-models-self-improving-alignment-with-llm/ocr/paper/doc_0.md",
+      "markdown_image_paths": [],
+      "output_image_paths": []
+    }
+  ]
+}

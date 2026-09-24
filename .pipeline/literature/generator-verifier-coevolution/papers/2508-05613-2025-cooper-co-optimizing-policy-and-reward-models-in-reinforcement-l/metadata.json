@@ -1,0 +1,24 @@
+{
+  "source": "arxiv+openalex",
+  "title": "Cooper: Co-Optimizing Policy and Reward Models in Reinforcement Learning for Large Language Models",
+  "authors": [
+    "Hong, Haitao",
+    "Yan, Yuchen",
+    "Wu, Xingyu",
+    "Hou, Guiyang",
+    "Zhang, Wenqi",
+    "Lu, Weiming",
+    "Shen, Yongliang",
+    "Xiao, Jun"
+  ],
+  "abstract": "Large language models (LLMs) have demonstrated remarkable performance in reasoning tasks, where reinforcement learning (RL) serves as a key algorithm for enhancing their reasoning capabilities. Currently, there are two mainstream reward paradigms: model-based rewards and rule-based rewards. However, both approaches suffer from limitations: rule-based rewards lack robustness, while model-based rewards are vulnerable to reward hacking. To address these issues, we propose Cooper(Co-optimizing Policy Model and Reward Model), a RL framework that jointly optimizes both the policy model and the reward model. Cooper leverages the high precision of rule-based rewards when identifying correct responses, and dynamically constructs and selects positive-negative sample pairs for continued training the reward model. This design enhances robustness and mitigates the risk of reward hacking. To further support Cooper, we introduce a hybrid annotation strategy that efficiently and accurately generates training data for the reward model. We also propose a reference-based reward modeling paradigm, where the reward model takes a reference answer as input. Based on this design, we train a reward model named VerifyRM, which achieves higher accuracy on VerifyBench compared to other models of the same size. We conduct reinforcement learning using both VerifyRM and Cooper. Our experiments show that Cooper not only alleviates reward hacking but also improves end-to-end RL performance, for instance, achieving a 0.54% gain in average accuracy on Qwen2.5-1.5B-Instruct. Our findings demonstrate that dynamically updating reward model is an effective way to combat reward hacking, providing a reference for better integrating reward models into RL.",
+  "year": 2025,
+  "landing_page": "https://arxiv.org/abs/2508.05613",
+  "pdf_url": "https://arxiv.org/pdf/2508.05613",
+  "arxiv_id": "2508.05613",
+  "venue": "arXiv",
+  "rank": 1,
+  "paper_slug": "2508-05613-2025-cooper-co-optimizing-policy-and-reward-models-in-reinforcement-l",
+  "local_pdf_path": ".pipeline/literature/generator-verifier-coevolution/papers/2508-05613-2025-cooper-co-optimizing-policy-and-reward-models-in-reinforcement-l/paper.pdf",
+  "pdf_status": "downloaded"
+}

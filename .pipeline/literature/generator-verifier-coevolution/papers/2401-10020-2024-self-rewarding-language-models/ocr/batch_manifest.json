@@ -1,0 +1,17 @@
+{
+  "converted_files": 1,
+  "items": [
+    {
+      "input_path": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2401-10020-2024-self-rewarding-language-models/paper.pdf",
+      "output_dir": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2401-10020-2024-self-rewarding-language-models/ocr/paper",
+      "backend": "pdfminer",
+      "documents": [
+        {
+          "markdown_path": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2401-10020-2024-self-rewarding-language-models/ocr/paper/doc_0.md",
+          "markdown_image_paths": [],
+          "output_image_paths": []
+        }
+      ]
+    }
+  ]
+}

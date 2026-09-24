@@ -1,0 +1,12 @@
+{
+  "input_path": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2203-14465-2022-star-bootstrapping-reasoning-with-reasoning/paper.pdf",
+  "output_dir": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2203-14465-2022-star-bootstrapping-reasoning-with-reasoning/ocr/paper",
+  "backend": "pdfminer",
+  "documents": [
+    {
+      "markdown_path": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2203-14465-2022-star-bootstrapping-reasoning-with-reasoning/ocr/paper/doc_0.md",
+      "markdown_image_paths": [],
+      "output_image_paths": []
+    }
+  ]
+}

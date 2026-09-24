@@ -1,0 +1,15 @@
+{
+  "source": "arxiv (title verified from PDF)",
+  "title": "Absolute Zero: Reinforced Self-play Reasoning with Zero Data",
+  "authors": [],
+  "abstract": null,
+  "year": 2025,
+  "landing_page": "https://arxiv.org/abs/2505.03335",
+  "pdf_url": "https://arxiv.org/pdf/2505.03335",
+  "arxiv_id": "2505.03335",
+  "venue": "arXiv",
+  "rank": 12,
+  "paper_slug": "2505-03335-2025-absolute-zero-reinforced-self-play-reasoning-with-zero-data",
+  "local_pdf_path": "papers/2505-03335-2025-absolute-zero-reinforced-self-play-reasoning-with-zero-data/paper.pdf",
+  "pdf_status": "downloaded"
+}

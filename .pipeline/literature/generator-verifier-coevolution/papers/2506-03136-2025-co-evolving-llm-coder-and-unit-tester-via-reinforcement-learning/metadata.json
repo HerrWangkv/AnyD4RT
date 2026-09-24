@@ -1,0 +1,15 @@
+{
+  "source": "arxiv (title verified from PDF)",
+  "title": "Co-Evolving LLM Coder and Unit Tester via Reinforcement Learning",
+  "authors": [],
+  "abstract": null,
+  "year": 2025,
+  "landing_page": "https://arxiv.org/abs/2506.03136",
+  "pdf_url": "https://arxiv.org/pdf/2506.03136",
+  "arxiv_id": "2506.03136",
+  "venue": "arXiv",
+  "rank": 19,
+  "paper_slug": "2506-03136-2025-co-evolving-llm-coder-and-unit-tester-via-reinforcement-learning",
+  "local_pdf_path": "papers/2506-03136-2025-co-evolving-llm-coder-and-unit-tester-via-reinforcement-learning/paper.pdf",
+  "pdf_status": "downloaded"
+}

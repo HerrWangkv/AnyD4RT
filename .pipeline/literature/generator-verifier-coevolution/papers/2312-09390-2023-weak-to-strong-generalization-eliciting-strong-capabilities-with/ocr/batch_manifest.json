@@ -1,0 +1,17 @@
+{
+  "converted_files": 1,
+  "items": [
+    {
+      "input_path": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2312-09390-2023-weak-to-strong-generalization-eliciting-strong-capabilities-with/paper.pdf",
+      "output_dir": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2312-09390-2023-weak-to-strong-generalization-eliciting-strong-capabilities-with/ocr/paper",
+      "backend": "pdfminer",
+      "documents": [
+        {
+          "markdown_path": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2312-09390-2023-weak-to-strong-generalization-eliciting-strong-capabilities-with/ocr/paper/doc_0.md",
+          "markdown_image_paths": [],
+          "output_image_paths": []
+        }
+      ]
+    }
+  ]
+}

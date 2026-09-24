@@ -1,0 +1,15 @@
+{
+  "source": "arxiv (title verified from PDF)",
+  "title": "TTRL: Test-Time Reinforcement Learning",
+  "authors": [],
+  "abstract": null,
+  "year": 2025,
+  "landing_page": "https://arxiv.org/abs/2504.16084",
+  "pdf_url": "https://arxiv.org/pdf/2504.16084",
+  "arxiv_id": "2504.16084",
+  "venue": "arXiv",
+  "rank": 18,
+  "paper_slug": "2504-16084-2025-ttrl-test-time-reinforcement-learning",
+  "local_pdf_path": "papers/2504-16084-2025-ttrl-test-time-reinforcement-learning/paper.pdf",
+  "pdf_status": "downloaded"
+}

@@ -1,0 +1,28 @@
+{
+  "source": "arxiv+openalex",
+  "title": "World-R1: Reinforcing 3D Constraints for Text-to-Video Generation",
+  "authors": [
+    "Weijie Wang",
+    "Xiaoxuan He",
+    "Youping Gu",
+    "Yifan Yang",
+    "Zeyu Zhang",
+    "Yefei He",
+    "Yanbo Ding",
+    "Xirui Hu",
+    "Donny Y. Chen",
+    "Zhiyuan He",
+    "Yuqing Yang",
+    "Bohan Zhuang"
+  ],
+  "abstract": "Recent video foundation models demonstrate impressive visual synthesis but frequently suffer from geometric inconsistencies. While existing methods attempt to inject 3D priors via architectural modifications, they often incur high computational costs and limit scalability. We propose World-R1, a framework that aligns video generation with 3D constraints through reinforcement learning. To facilitate this alignment, we introduce a specialized pure text dataset tailored for world simulation. Utilizing Flow-GRPO, we optimize the model using feedback from pre-trained 3D foundation models and vision-language models to enforce structural coherence without altering the underlying architecture. We further employ a periodic decoupled training strategy to balance rigid geometric consistency with dynamic scene fluidity. Extensive evaluations reveal that our approach significantly enhances 3D consistency while preserving the original visual quality of the foundation model, effectively bridging the gap between video generation and scalable world simulation.",
+  "year": 2026,
+  "landing_page": "https://arxiv.org/abs/2604.24764",
+  "pdf_url": "https://arxiv.org/pdf/2604.24764",
+  "arxiv_id": "2604.24764",
+  "venue": "arXiv",
+  "rank": 5,
+  "paper_slug": "2604-24764-2026-world-r1-reinforcing-3d-constraints-for-text-to-video-generation",
+  "local_pdf_path": ".pipeline/literature/generator-verifier-coevolution/papers/2604-24764-2026-world-r1-reinforcing-3d-constraints-for-text-to-video-generation/paper.pdf",
+  "pdf_status": "downloaded"
+}

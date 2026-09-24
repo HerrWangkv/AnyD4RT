@@ -1,0 +1,12 @@
+{
+  "input_path": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2604-24764-2026-world-r1-reinforcing-3d-constraints-for-text-to-video-generation/paper.pdf",
+  "output_dir": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2604-24764-2026-world-r1-reinforcing-3d-constraints-for-text-to-video-generation/ocr/paper",
+  "backend": "pdfminer",
+  "documents": [
+    {
+      "markdown_path": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2604-24764-2026-world-r1-reinforcing-3d-constraints-for-text-to-video-generation/ocr/paper/doc_0.md",
+      "markdown_image_paths": [],
+      "output_image_paths": []
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "converted_files": 1,
+  "items": [
+    {
+      "input_path": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2601-04090-2026-gen3r-3d-scene-generation-meets-feed-forward-reconstruction/paper.pdf",
+      "output_dir": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2601-04090-2026-gen3r-3d-scene-generation-meets-feed-forward-reconstruction/ocr/paper",
+      "backend": "pdfminer",
+      "documents": [
+        {
+          "markdown_path": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2601-04090-2026-gen3r-3d-scene-generation-meets-feed-forward-reconstruction/ocr/paper/doc_0.md",
+          "markdown_image_paths": [],
+          "output_image_paths": []
+        }
+      ]
+    }
+  ]
+}

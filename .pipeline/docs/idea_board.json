@@ -1,0 +1,268 @@
+{
+  "generated": "2026-09-25",
+  "inputs": [
+    ".pipeline/docs/gap_matrix.md",
+    ".pipeline/docs/paper_digests.md",
+    ".pipeline/memory/literature_bank.md",
+    "README.md"
+  ],
+  "ideas": [
+    {
+      "id": "I1",
+      "name": "已知标签编辑的 critic 忠实度训练",
+      "one_liner": "对真实视频做编辑（平移、删除、交换物体，冻结），编辑后的几何可以精确算出。用这些编辑后的视频和对应的几何标签训练 OpenD4RT，让它如实重建视频里的内容，而不是用先验把被破坏的区域补回 GT。这样 critic 对生成错误的敏感度就能被显式训练。",
+      "breaks": [
+        {
+          "paper": "Cooper 2508.05613",
+          "limitation": "负样本靠 LLM 把答案改错得到，只适用于二分类 RM，负样本没有精确标签"
+        },
+        {
+          "paper": "PVG 2407.13692",
+          "limitation": "verifier 是二分类器，没有定义连续回归型 critic 怎么加固"
+        }
+      ],
+      "gaps": [
+        "G2",
+        "G1"
+      ],
+      "readme_hooks": [
+        "§3.6 失效情况表",
+        "S1 人为退化测试（从只测试变为也用于训练）",
+        "§5"
+      ],
+      "method": "编辑时用 GT 实例分割，对 GT 的点和轨迹做同样的变换（平移物体→轨迹平移；删除物体→该区域改用背景的深度或轨迹，需要有遮挡背景的 GT，合成数据集才能提供；冻结物体→位移为 0）。损失 = 原生 D4RT 损失，并额外约束编辑区域的一致性。辅助项仿照 CURE 的 µ：对（原视频、编辑视频）成对计算奖励，要求排序正确。",
+      "eval": "S1 的泄漏率（编辑后 reward ≥ 原视频 reward 的比例）应当下降；WorldTrack 不能掉点；S4 的 Kendall τ 应当上升。",
+      "risks": [
+        "删除物体需要知道被遮挡背景的几何，只有部分合成数据集（Kubric、PointOdyssey）有",
+        "编辑后的视频有明显伪影，critic 可能学会识别伪影本身，而不是理解几何"
+      ]
+    },
+    {
+      "id": "I2",
+      "name": "Sneaky AnyView：用对抗生成器找出并修补 critic 的漏洞",
+      "one_liner": "在有 GT 的数据上训练一个 sneaky LoRA，奖励为 r_critic − λ·r_GT，专门生成 OpenD4RT 打高分、但 GT 投影误差大的视频；再用这些视频（加上 M_ver 与 GT 分析得到的真实标签）加固 OpenD4RT。这是 PVG 在 4D 连续几何上的版本。",
+      "breaks": [
+        {
+          "paper": "PVG 2407.13692",
+          "limitation": "只做了二分类 verifier 和数学文本"
+        },
+        {
+          "paper": "World-R1 2604.24764",
+          "limitation": "奖励投机只靠多项奖励组合来抑制（D.7），没有主动搜索漏洞"
+        }
+      ],
+      "gaps": [
+        "G1",
+        "G2"
+      ],
+      "readme_hooks": [
+        "§1.3 已知不能保证的事项",
+        "S6"
+      ],
+      "method": "只在 Kubric-5D（有 V_b）或 C_b = C_a 的设置上训练 sneaky，因为那里能拿到独立于 critic 的真值 r_GT。sneaky 的产出作为 I1 的困难负样本。",
+      "eval": "sneaky 能够提升的奖励空间（即 critic 的漏洞大小）应当随轮次缩小；helpful AnyView 的独立几何指标应当提升。",
+      "risks": [
+        "需要多训练一个 RL 策略，开销翻倍",
+        "要有像素级 GT 才能判定'误差大'，D4RT GT 分支上没有目标 RGB，sneaky 只能在 Kubric 上训练"
+      ]
+    },
+    {
+      "id": "I3",
+      "name": "快照分歧门控的 KL，加 DDRL 式数据锚定",
+      "one_liner": "交替训练天然产生 critic 快照 D₀、D₁……。用快照之间（以及不同 query 子集之间）奖励的分歧衡量不确定性，只对分歧最高的约 10% 候选加 KL；参考模型每轮更新为 A_k；把 README 中的反向 KL 换成 DDRL 式的扩散损失锚定（Kubric-5D 加上 C_b = C_a 时的源视频）。",
+      "breaks": [
+        {
+          "paper": "GARDO 2512.24138",
+          "limitation": "需要多个独立训练的奖励模型才能组成集成；只在 T2I 上验证"
+        },
+        {
+          "paper": "DDRL 2512.04332",
+          "limitation": "奖励模型是冻结的，没有讨论 critic 在线更新时锚定是否仍然有效"
+        }
+      ],
+      "gaps": [
+        "G1"
+      ],
+      "readme_hooks": [
+        "§4.4 KL 与 β",
+        "S4 重测稳定性",
+        "S6"
+      ],
+      "method": "u_i = std_k( r_i ; D_k ) 或 std_q( r_i ; 不同 query 子集 )。L = L_π + β·1[u_i ∈ top-10%]·KL + λ_nat·L_denoise(数据)。",
+      "eval": "与 README 原方案（全局 β、固定参考模型）比较：同等预算下独立几何指标和外观指标（LPIPS）的帕累托前沿。",
+      "risks": [
+        "增量偏工程，单独成文的新颖性有限，更适合作为主方法中的一个组件"
+      ]
+    },
+    {
+      "id": "I4",
+      "name": "受 critic 可靠性约束的可学习性相机课程",
+      "one_liner": "借鉴 R-Zero 和 Absolute Zero 的提议者：自适应选择目标相机 C_b（θ 和轨迹形状），最大化组内奖励方差，也就是可学习性；同时约束共视覆盖率和 z-buffer 的已知区域比例，使奖励在 critic 可信的范围内计算。",
+      "breaks": [
+        {
+          "paper": "R-Zero 2508.05004 / Absolute Zero 2505.03335",
+          "limitation": "任务空间是离散的文本或代码，没有考虑评判者自身可靠性的约束"
+        },
+        {
+          "paper": "TaRoS 2511.19356",
+          "limitation": "组内奖励饱和只靠事后降权处理，没有从出题端避免"
+        }
+      ],
+      "gaps": [
+        "G5"
+      ],
+      "readme_hooks": [
+        "H4",
+        "§7.2 相机 C_b",
+        "§4.4 std_g < δ 时跳过"
+      ],
+      "method": "每段视频维护一组 θ 候选，记录其组内奖励方差的滑动估计，采样概率 ∝ 方差 × 1[覆盖率 > c_min]；后期可以换成一个小的 bandit 或策略网络。",
+      "eval": "与固定 {±15°, ±30°} 比较：达到相同独立几何指标所需的 GPU 时；被跳过的组的比例。",
+      "risks": [
+        "README 把 H4 列为后续模块；单独贡献偏小，更适合作为组件"
+      ]
+    },
+    {
+      "id": "I5",
+      "name": "GT 动态轨迹的分段位移奖励（不需要周期解耦）",
+      "one_liner": "奖励的主体改为 GT 动态轨迹在新视角下的位移误差，并按时间 t 和 query 分段计算密集 advantage。目标是在不挂起几何奖励的情况下，同时提升刚性一致性和非刚性运动的保真度，直接回应 World-R1 的'刚性过拟合'和 CamVerse 的'只约束相机'。",
+      "breaks": [
+        {
+          "paper": "World-R1 2604.24764",
+          "limitation": "3D 奖励导致过拟合到静态刚性，只能每 100 步挂起 R3D、改用动态提示'周期解耦'，动态区域没有几何约束；生成近乎静止的片段是一种奖励投机（D.7）"
+        },
+        {
+          "paper": "CamVerse 2512.02870",
+          "limitation": "奖励只衡量相机轨迹，不约束场景和物体运动"
+        },
+        {
+          "paper": "VIGOR 2603.16271",
+          "limitation": "只衡量内部一致性，没有外部 GT；以静态为主"
+        }
+      ],
+      "gaps": [
+        "G3",
+        "G4"
+      ],
+      "readme_hooks": [
+        "H1",
+        "§3.5 的 d 项",
+        "§7.2 约一半 query 取动态点",
+        "S5 第 4 组（去掉位移项）"
+      ],
+      "method": "沿用 README §3.5 的 e 和 d；把 r 拆成 r(t) 分段计算，advantage 在组内按分段标准化（参照 CamVerse 的片段奖励）。核心对照：World-R1 式的自一致奖励（VGGT 或 DA3 重建）± 周期解耦，对比本方法。",
+      "eval": "动态区域的轨迹误差（用独立跟踪器，并在有 GT 的数据上校准）；动态程度，比如 VBench 的 dynamic degree，检查有没有退化成静止视频；静态区域的几何一致性。",
+      "risks": [
+        "训练数据限于合成的动态 GT 数据集（PointOdyssey、DynamicReplica、Kubric），真实数据只有静态场景",
+        "按 t 分段给 advantage，如何与扩散去噪步上的信用分配对应，需要设计"
+      ]
+    },
+    {
+      "id": "I6",
+      "name": "单纯的双向提升（H3 本身）",
+      "one_liner": "不加额外技巧，按 README 的方案交替更新：AnyView 用冻结的 D_k 做 GRPO，OpenD4RT 用 A_k 生成的缓存加 M_ver 掩码训练；核心证据是换搭档实验（D₁ vs D₀、A₁ vs A₀），以及两个模型单独推理时都在原任务上提升。",
+      "breaks": [
+        {
+          "paper": "World-R1 2604.24764 / CamVerse 2512.02870 / VIGOR 2603.16271",
+          "limitation": "几何 critic 全部冻结，只做了单向提升"
+        },
+        {
+          "paper": "GenFusion 2503.21219 / Vivid4D 2504.11092",
+          "limitation": "重建与生成的互促限于逐场景优化（3DGS），没有训练可以泛化的前馈模型"
+        },
+        {
+          "paper": "Ouroboros3D 2406.03184 / Gen3R 2601.04090 / JOG3R 2501.01409",
+          "limitation": "两个模型在架构上耦合或联合训练，不能各自单独使用"
+        },
+        {
+          "paper": "Meta-Rewarding 2407.19594",
+          "limitation": "LLM 中的发现：只改进生成器时评判能力很快饱和，但没有在几何领域验证"
+        }
+      ],
+      "gaps": [
+        "G1"
+      ],
+      "readme_hooks": [
+        "H3",
+        "S6",
+        "§1.2 交替更新"
+      ],
+      "method": "README §2.1 加 §5 加 S6，原样执行。",
+      "eval": "S6：同等预算下，用 D₁ 训练的 AnyView 优于用 D₀ 训练的；用 A₁ 缓存训练的 OpenD4RT 优于用 A₀ 缓存训练的；两个最终模型都优于同等预算的单向训练。",
+      "risks": [
+        "H2（用生成数据训练 OpenD4RT 真能提升真实评测）不成立的话，整个双向链条就断了",
+        "没有防合谋机制，换搭档的收益可能来自两者协调一致，而不是真正变好",
+        "开销最大：要做两个方向乘两轮，再加上对照组"
+      ]
+    }
+  ],
+  "scores": {
+    "I1": {
+      "novelty": 4,
+      "feasibility": 4,
+      "impact": 3,
+      "note": "S1 的编辑流程已有设计，可直接用于训练；Crome 和 FIRM 只针对偏好型或打分型 RM，没有做过已知几何标签的编辑"
+    },
+    "I2": {
+      "novelty": 4,
+      "feasibility": 2,
+      "impact": 4,
+      "note": "要多训练一个 RL 策略；r_GT 只在 Kubric 或 C_b=C_a 时能拿到"
+    },
+    "I3": {
+      "novelty": 2,
+      "feasibility": 4,
+      "impact": 3,
+      "note": "GARDO 加 DDRL 的组合，偏工程，适合作为组件"
+    },
+    "I4": {
+      "novelty": 3,
+      "feasibility": 4,
+      "impact": 2,
+      "note": "README 把它列为后续模块（H4），适合作为组件"
+    },
+    "I5": {
+      "novelty": 3,
+      "feasibility": 4,
+      "impact": 4,
+      "note": "是 H1 相对 World-R1 的核心区分点；MVTrack4Gen 部分重叠，但它不是 RL"
+    },
+    "I6": {
+      "novelty": 4,
+      "feasibility": 2,
+      "impact": 5,
+      "note": "前馈模型、架构解耦的双向提升目前没有先例；成败取决于 H2，风险最高"
+    }
+  },
+  "novelty_check_extra": {
+    "I6": [
+      "GenFusion 2503.21219",
+      "Ouroboros3D 2406.03184",
+      "Vivid4D 2504.11092",
+      "Geo4D 2504.07961",
+      "ArtiFixer 2603.00492"
+    ],
+    "I5": [
+      "MVTrack4Gen 2606.26087（用多视角点跟踪作为 4D 生成的监督，是扩散内部的损失，不是外部 critic 的 RL）"
+    ],
+    "I1": [
+      "Crome 2506.16507（LLM 中用反事实样本增广 RM）",
+      "FIRM 2603.12247（图像编辑的鲁棒 RM）"
+    ]
+  },
+  "selected": {
+    "main": "I6",
+    "components": [
+      "I5",
+      "I1"
+    ],
+    "optional": [
+      "I3",
+      "I4"
+    ],
+    "deferred": [
+      "I2"
+    ],
+    "date": "2026-09-25"
+  }
+}

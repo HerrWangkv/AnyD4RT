@@ -1,0 +1,15 @@
+{
+  "source": "arxiv (title verified from PDF)",
+  "title": "Constitutional AI: Harmlessness from AI Feedback",
+  "authors": [],
+  "abstract": null,
+  "year": 2022,
+  "landing_page": "https://arxiv.org/abs/2212.08073",
+  "pdf_url": "https://arxiv.org/pdf/2212.08073",
+  "arxiv_id": "2212.08073",
+  "venue": "arXiv",
+  "rank": 22,
+  "paper_slug": "2212-08073-2022-constitutional-ai-harmlessness-from-ai-feedback",
+  "local_pdf_path": "papers/2212-08073-2022-constitutional-ai-harmlessness-from-ai-feedback/paper.pdf",
+  "pdf_status": "downloaded"
+}

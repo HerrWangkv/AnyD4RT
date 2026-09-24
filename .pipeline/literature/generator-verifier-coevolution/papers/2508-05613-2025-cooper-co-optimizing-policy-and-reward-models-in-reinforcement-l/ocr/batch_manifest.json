@@ -1,0 +1,17 @@
+{
+  "converted_files": 1,
+  "items": [
+    {
+      "input_path": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2508-05613-2025-cooper-co-optimizing-policy-and-reward-models-in-reinforcement-l/paper.pdf",
+      "output_dir": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2508-05613-2025-cooper-co-optimizing-policy-and-reward-models-in-reinforcement-l/ocr/paper",
+      "backend": "pdfminer",
+      "documents": [
+        {
+          "markdown_path": "/storage_local/kwang/repos/AnyD4RT/.pipeline/literature/generator-verifier-coevolution/papers/2508-05613-2025-cooper-co-optimizing-policy-and-reward-models-in-reinforcement-l/ocr/paper/doc_0.md",
+          "markdown_image_paths": [],
+          "output_image_paths": []
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "source": "arxiv+openalex",
+  "title": "Gen3R: 3D Scene Generation Meets Feed-Forward Reconstruction",
+  "authors": [
+    "Jiaxin Huang",
+    "Yuanbo Yang",
+    "Bangbang Yang",
+    "Lin Ma",
+    "Yuewen Ma",
+    "Yiyi Liao"
+  ],
+  "abstract": "We present Gen3R, a method that bridges the strong priors of foundational reconstruction models and video diffusion models for scene-level 3D generation. We repurpose the VGGT reconstruction model to produce geometric latents by training an adapter on its tokens, which are regularized to align with the appearance latents of pre-trained video diffusion models. By jointly generating these disentangled yet aligned latents, Gen3R produces both RGB videos and corresponding 3D geometry, including camera poses, depth maps, and global point clouds. Experiments demonstrate that our approach achieves state-of-the-art results in single- and multi-image conditioned 3D scene generation. Additionally, our method can enhance the robustness of reconstruction by leveraging generative priors, demonstrating the mutual benefit of tightly coupling reconstruction and generative models.",
+  "year": 2026,
+  "landing_page": "https://arxiv.org/abs/2601.04090",
+  "pdf_url": "https://arxiv.org/pdf/2601.04090",
+  "arxiv_id": "2601.04090",
+  "venue": "arXiv",
+  "rank": 7,
+  "paper_slug": "2601-04090-2026-gen3r-3d-scene-generation-meets-feed-forward-reconstruction",
+  "local_pdf_path": ".pipeline/literature/generator-verifier-coevolution/papers/2601-04090-2026-gen3r-3d-scene-generation-meets-feed-forward-reconstruction/paper.pdf",
+  "pdf_status": "downloaded"
+}
