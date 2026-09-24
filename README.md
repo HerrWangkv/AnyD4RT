@@ -40,6 +40,9 @@
 - **`anyview/*.sqsh`**：AnyView 数据的 squashfs 版本。
   - 截至 2026-09-24：val、test、indist 已完成并核对了文件数；train、tiny、zeroshot 的打包作业仍在进行。
   - 全部完成并核对后，再决定是否删除解压目录和压缩包。
+- **软链接随机器而定**：上面的 `OD/checkpoints/*/opend4rt.ckpt`、`AV/checkpoints`、`AV/data` 是子模块里的本地软链接，不在 git 中，每台机器要各自建。
+  - HoreKa：指向 `/lsdf/kit/mrt/projects/d4rt-data/...`；
+  - mrtknecht3：指向 sshfs 挂载点 `/tmp/kwang-data/...`（目录结构相同）。挂载断开时软链接失效。
 - **挂载方式**：`squashfuse <x>.sqsh <mountpoint>`。
   - 计算节点需要 `#SBATCH --constraint=LSDF`。
   - [待核查]：计算节点上能否使用 squashfuse；挂载后的路径能否对上 `OD/configs/train_effective.yaml` 里的 `data/...` 相对路径。
