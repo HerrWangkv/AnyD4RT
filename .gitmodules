@@ -1,0 +1,6 @@
+[submodule "third_party/AnyView-DVS"]
+	path = third_party/AnyView-DVS
+	url = https://github.com/TRI-ML/AnyView-DVS.git
+[submodule "third_party/Open-d4rt"]
+	path = third_party/Open-d4rt
+	url = https://github.com/Lijiaxin0111/Open-d4rt.git

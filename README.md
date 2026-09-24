@@ -1,0 +1,678 @@
+# AnyD4RT：AnyView 与 OpenD4RT 的互补训练方案
+
+本文档是后续实现和实验的统一方案，描述当前采用的设计，不记录讨论过程。
+
+标记约定：
+
+- **[代码确认]**：已在本仓库固定版本的代码或数据中核实，附文件和行号。
+- **[设计]**：拟采用的做法，尚未实现。
+- **[假设]**：需要实验验证，结论未知。
+- **[待定]**：阈值或选择尚未确定。
+- **[待核查]**：技术细节尚未确认。
+
+截至 2026-09-24，本仓库**没有**任何训练或交互代码，下文所有模块均未实现。
+
+---
+
+## 0. 仓库与数据
+
+### 0.1 子模块（审查所依据的版本）
+
+| 子模块 | 上游 | 本地 commit |
+|---|---|---|
+| `third_party/AnyView-DVS` | https://github.com/TRI-ML/AnyView-DVS | `11b7189` |
+| `third_party/Open-d4rt` | https://github.com/Lijiaxin0111/Open-d4rt | `403290a` |
+
+下文的 `AV/` 指 `third_party/AnyView-DVS/`，`OD/` 指 `third_party/Open-d4rt/`。
+
+### 0.2 数据与权重（LSDF：`/lsdf/kit/mrt/projects/d4rt-data/`）
+
+- **`d4rt/*.sqsh`**：OpenD4RT 的数据，以 zstd 压缩的 squashfs 镜像存放。
+  - 9Mix 的九个数据集：blendermvs、co3d、dynamicreplica、kubricfull_processed、mvssynth、pointodyssey、scannet、tartanair、virtualkitti2。
+  - 另有 `openvid1m.sqsh` 和 `worldtrack.sqsh`。
+  - **WorldTrack 只用于评测，不作训练数据。**
+- **`d4rt/checkpoints/`**：OpenD4RT 的 `OpenD4RT_32CLIP_9Dataset_NoAUG` 和 `OpenD4RT_48CLIP_9Mix_NoCropAUG` 权重，sha256 已与 Hugging Face 核对。
+  - `OD/checkpoints/*/opend4rt.ckpt` 以软链接指向这里。
+- **`anyview/checkpoints/`**：AnyView 的 `anyview_dvs_2b.pt`、`tokenizer.pth`、`default_text_emb.pt`，已核对 sha256。
+- **`anyview/data/`**：解压后的 Kubric5D_{train,val,test,tiny} 和 AnyViewBench_{zeroshot,indist}。
+  - `AV/checkpoints` 和 `AV/data` 以软链接指向这里。
+  - 原始压缩包在 `anyview/archives/`。
+- **`anyview/*.sqsh`**：AnyView 数据的 squashfs 版本。
+  - 截至 2026-09-24：val、test、indist 已完成并核对了文件数；train、tiny、zeroshot 的打包作业仍在进行。
+  - 全部完成并核对后，再决定是否删除解压目录和压缩包。
+- **挂载方式**：`squashfuse <x>.sqsh <mountpoint>`。
+  - 计算节点需要 `#SBATCH --constraint=LSDF`。
+  - [待核查]：计算节点上能否使用 squashfuse；挂载后的路径能否对上 `OD/configs/train_effective.yaml` 里的 `data/...` 相对路径。
+
+### 0.3 运行环境
+
+本仓库通过 git 在 `mrtknecht*` 与 HoreKa（`hkn199*`）之间同步。代码里**不能写死数据路径**，数据根目录统一用环境变量指定，建议命名为 `D4RT_DATA_ROOT`，模块尚未实现。
+
+| 机器 | 数据访问方式 | GPU | 运行方式 |
+|---|---|---|---|
+| HoreKa `hkn199*`（登录节点） | 直接访问 `/lsdf/kit/mrt/projects/d4rt-data/` | 常用 A100；H100 可能可用，但排队很久 | 必须提交 sbatch；计算节点需要 `--constraint=LSDF` |
+| `mrtknecht3` | 用 sshfs 把 d4rt-data 挂载在 `/tmp/kwang-data` | 8 × RTX 6000 Ada（48 GB） | 直接运行 |
+
+[待核查]：
+
+- 在 mrtknecht3 上，通过 sshfs 读取 `.sqsh`（再用 squashfuse 挂载）的吞吐是否够训练用，是否需要先拷到本地盘。
+- `/tmp` 挂载点在重启后是否保留。
+- 两台机器之间的环境差异，例如 CUDA 版本。
+
+### 0.4 本仓库脚本
+
+| 脚本 | 用途 |
+|---|---|
+| `scripts/download_anyview_data.sh` | 下载、校验并解压 AnyView 的数据和权重，可以续传 |
+| `scripts/download_anyview_data.sbatch` | 在 dev_cpuonly 分区提交上面的下载脚本 |
+| `scripts/pack_anyview_sqsh.sbatch` | 打包 squashfs，并核对文件数 |
+
+---
+
+## 1. 研究目标与贡献假设
+
+### 1.1 目标
+
+- AnyView（生成器 G_φ）和 OpenD4RT（重建器 R_θ）保持**各自独立的结构**，不共享 backbone 或特征，也不加大型 bridge。
+- 两个模型各自保留**原生 GT 监督**。
+- 两者只通过输入输出上的**跨视角 4D（几何/轨迹）约束**交互。
+- 最终要求两个模型**单独推理**时，都在自己的原任务上获得收益。
+
+### 1.2 交互方式
+
+- **AnyView**：用跨视角几何/轨迹一致性构造奖励，做 RL 微调（GRPO 类），同时保留原生去噪监督。
+  - 奖励计算不需要梯度穿过 OpenD4RT、VAE 或采样链。
+- **OpenD4RT**：在原生数据上训练，同时使用**经过校验的**生成视角及其变换后的 GT 标签。
+- **交替更新**：每一轮固定一方、更新另一方。下一轮使用更新后的搭档。
+  - 用"换搭档"实验检验"更新后的搭档是否比原始搭档更有帮助"。
+- **query 选择和相机轨迹选择**：作为后续研究模块，第一版只用简单基线。
+
+### 1.3 贡献假设（都是 [假设]，不预设成立）
+
+1. **H1**：在只有单目 4D GT、没有目标 RGB 的数据上，用"GT 轨迹在新视角下的几何奖励"加冻结的 OpenD4RT，可以提升 AnyView 在独立评测上的几何和运动一致性，而且不损害外观质量。
+2. **H2**：经过校验的生成视角加上精确变换的 GT 标签，能让 OpenD4RT 在真实评测上的提升超过同等预算下的原生训练和 GT warp 增广。
+3. **H3**：交替迭代时，更新后的搭档比原始搭档带来更大的收益，也就是双向协同。
+4. **H4（后续）**：带误差归因的 query 选择和可学习性感知的相机选择，优于简单基线。
+
+如果只有 H1 成立，项目会退化为单向的"用重建模型指导新视角生成"。这个方向与已有的"几何或重建奖励微调视频扩散"工作高度相关，需要做文献查新。
+
+**已知不能保证的事项：**
+
+- 不保证避免坍缩或合谋。
+- 不能证明不存在奖励投机。
+- 双向提升不必然成立。
+
+---
+
+## 2. 两类数据分支
+
+| | NVS GT 分支 | D4RT GT 分支 |
+|---|---|---|
+| 数据 | 同步多视角 RGB 加相机（Kubric-5D） | 源视频加实际可用的深度、轨迹、相机（9Mix） |
+| 缺少 | 几何 GT | 目标视角 RGB |
+| AnyView 的原生监督 | 去噪损失，以真实 V_b 为目标 | 无（但训练中会穿插 Kubric 的原生监督） |
+| 核心难点 | 可靠共视 query 的选择、跨视角对应、尺度 | 目标相机的选择、目标视角可见性、生成标签的可靠性 |
+| 优先级 | 完整规划保留；等尺度和对应流程明确后再接入 | **最小原型优先** |
+
+### 2.1 D4RT GT 分支（最小原型）
+
+**更新 AnyView（OpenD4RT 冻结）：**
+
+- **参考**：GT 世界轨迹 X_GT，按选定的 C_b 精确变换到目标相机坐标系。
+- **奖励**：冻结的 R_θ 在生成视频 V̂_b 上、在 GT 预期投影位置处的轨迹误差，定义见 §3.5。
+- **有效区域**：满足三个条件的点和时刻——GT 有效、在目标视角 z-buffer 中判定为可见、落在画面内。另外按 OpenD4RT 在真实源视频上的误差做门控。
+- **更新对象**：只更新 AnyView 的 LoRA。
+- **同时训练**：交替加入 Kubric-5D 的原生去噪损失。
+
+**更新 OpenD4RT（AnyView 冻结，使用缓存的生成视频）：**
+
+- **参考**：由 X_GT 和 C_b 精确计算出的原生 query 标签。
+- **损失**：OpenD4RT 的原生损失，只在经过校验的区域上计算，与原生 9Mix 训练混合。详见 §5。
+
+### 2.2 NVS GT 分支（完整规划，暂不实现）
+
+**更新 AnyView：**
+
+- **对应关系**：只在真实视频对 (V_a, V_b) 上，用冻结的 R_θ 建立，并且在看到生成视频之前就固定下来。具体步骤：
+  1. 把 R(V_a) 的点投影到相机 b；
+  2. 与 R(V_b) 做深度一致性检验；
+  3. 做往返一致性检验：在投影位置查询 R(V_b)，再投回相机 a，应落回原像素附近；
+  4. 通过的点构成可靠的共视对应。
+- **奖励**：R(V̂_b) 在这些对应的预期投影位置上的轨迹误差。
+- **原生去噪损失**：保留，以 V_b 为目标。
+- **辅助项或基线**：同相机的 R(V_b)↔R(V̂_b) 比较，以及相对 V_b 的 LPIPS 锚定。它们**不替代**跨视角奖励。
+- **注意**："同相机同像素"不等于同一个物理点，物理点的对应要由跨视角几何决定。
+
+**更新 OpenD4RT：**
+
+| 交互 | 判断 | 条件 |
+|---|---|---|
+| 真实视频对 R(V_a)↔R(V_b) 的跨视角一致性（相机已知） | 可行 | 与 AnyView 无关，属于普通自监督，作为对照 |
+| 在 V̂_b 上训练，伪标签来自真实视频对，只用生成与真实一致的区域 | 有条件可行 | 这一分支有 V_b，可以不经过 OpenD4RT、直接做局部校验。预期主要提升 OpenD4RT 在生成视频上的鲁棒性，也就是作为 critic 的质量；对真实视频单独推理的收益是 [假设] |
+| 不校验生成视频就用 R(V_a)↔R(V̂_b) 更新 OpenD4RT | 不采用 | 会让 OpenD4RT 学着附和生成出来的内容 |
+
+**尺度估计有两种方案**：
+
+- **方案 A**：每段视频用自身的相机运动估计。把 OpenD4RT 的查询结果做 Umeyama 对齐，得到它自己的相机轨迹，再用它的平移与已知的相机平移做最小二乘。
+- **方案 B**：在 (s_a, s_b/s_a) 的对数网格上做一致性搜索，取通过投影一致性检验的点数最多的一组尺度。
+
+两种方案的对应关系都是估计的输出而不是输入，所以不存在"先用尺度建对应、再用对应估尺度"的循环。
+
+**退化情况的处理**：
+
+- 小基线或纯旋转时，只能确定两段视频的尺度比 s_b/s_a，放弃绝对位置项。
+- 退化判据用中位视差角，阈值 [待定]。
+- Kubric-5D 的外参不是米制（`metadata.json` 中 `extrinsics.metric: false`），但 16 个相机之间是一致的。
+
+---
+
+## 3. 接口与数学定义
+
+### 3.1 已确认的接口事实
+
+**OpenD4RT 的时间与输入**
+
+- **时间索引是离散的** [代码确认]：
+  - `OD/src/model/query_embedding.py:61-63` 使用 `nn.Embedding(48)`；
+  - `:77-78` 把越界索引**悄悄截断**，不会报错；
+  - `OD/src/model/d4rt.py:271-273` 把索引转成 `.long()`；
+  - 所以不支持小数时间，也不能输入外部相机。
+- **48 帧是训练配置，不是结构硬上限** [代码确认]：
+  - 帧数配置在 `OD/checkpoints/*/model.yaml:7`；
+  - 位置编码按展平后的 token 序号做一维正弦编码（`OD/src/model/encoder.py:122`），与帧数 T 无关；
+  - 但 48×256²/(2·16·16) = 6144，正好等于 `max_tokens`（`model.yaml:25`），更多帧会触发空间平均池化（`encoder.py:101-110`）。
+- **奇数帧会丢最后一帧** [代码确认]：
+  - 时间方向的 patch 大小为 2，步长也是 2（`encoder.py:75-78`），41 帧时最后一帧不进入编码器；
+  - 局部 RGB patch 从 t_src 帧上取（`query_embedding.py:92,110`）。
+- **训练时的帧间隔** [代码确认]：
+  - 只有 1 或 2（`OD/configs/train_effective.yaml:201-202`，`OD/src/data/raw_augment.py:264`）；
+  - 只有场景太短时，才重复最后一帧补齐（`raw_augment.py:247`）。
+- **xyz 输出没有尺度** [代码确认]：
+  - `OD/src/losses/d4rt_loss.py:18-26` 把预测和 GT 各自除以平均深度；
+  - 由 `train_effective.yaml:144` 开启；
+  - 评测时用 Umeyama Sim3 对齐（`OD/src/eval/tasks.py:11`）。
+- **冻结当 critic 时必须用 `eval()`**：编码器和解码器都有 dropout=0.1（`encoder.py:88`）。
+
+**OpenD4RT 的 query 语义** [代码确认]：
+
+| 字段 | 实际含义 | 代码位置 |
+|---|---|---|
+| `t_cam` | 输入视频自身第 t_cam 帧的相机，定义坐标系 | — |
+| `xyz_3d` | 点在 t_tgt 时刻的位置，表达在 t_cam 帧相机坐标系下 | `OD/src/data/depth_query_builder.py:211,481` |
+| `uv_2d` | 投影到 **t_tgt** 帧视角，而不是 t_cam 帧 | `depth_query_builder.py:246,497`；`d4rt_loss.py:133-147` |
+| visibility | 在 t_tgt 帧视角下的可见性 | 同上 |
+| `displacement` | P(t_tgt) − P(t_src)，旋转到 t_cam 帧坐标系 | — |
+
+**AnyView 的帧数与相机** [代码确认]：
+
+- 只支持 1+4k 帧，最多 41 帧（`AV/anyview/vae.py:13,62`，`AV/anyview/cameras.py:215`）。
+- world2cam 满足 x_cam = R x_world + t（`cameras.py:14`）。
+- 所有位姿都重新锚定到目标视角第 0 帧（`AV/scripts/infer.py:132`，`cameras.py:91`）。
+- 相机 cross 通道要乘一个按数据集查表的尺度因子（`cameras.py:29-49`），查不到会报错（`:67`）。
+
+**Kubric-5D** [代码确认]：
+
+- `metadata.json` 的 labels 里列了 depth，但实际文件只有 `rgb/` 和 `lowdim/`，没有深度。
+- 外参 `metric: false`；AnyView 对它用 1/32 的尺度因子（`AV/anyview/kubric_dataset.py:12`）。
+- 只使用第 0 帧的内参（`kubric_dataset.py:65-66`）。
+- 相机轴向：抽查 cam00 第 0 帧，+z 轴指向场景中心，推测是 OpenCV 约定（+x 右、+y 下、+z 前），与 OpenD4RT 的数据规范一致。**[待核查]**：需要用投影单元测试确认。
+
+**9Mix 各数据集的监督方式** [代码确认]：
+
+- 采样权重见 `train_effective.yaml:97-106`。
+- 带动态轨迹 GT 的数据集，全部是合成数据：
+  - pointodyssey、dynamic_replica：用 `build_queries_from_trajectories` 构造监督；
+  - kubric_full（MOVi-F）：来自物体坐标；
+  - virtual_kitti2：由场景流传播出的部分轨迹。
+- 只有静态深度重投影监督的数据集：scannet（真实）、co3d（真实）、tartanair、blendermvs、mvs_synth。
+- **真实数据只有静态场景。**
+- [待核查]：virtual_kitti2 和 co3d 的 split 定义。
+
+### 3.2 相机约定与坐标变换 [设计]
+
+- **统一约定**：OpenCV 相机坐标（+x 右、+y 下、+z 前），相机到世界为 `X_w = R_t X_c + c_t`，等价于 `T_wc(t) = [R_t | c_t]`。
+- **两套坐标的换算**：OpenD4RT 用 `T_wc`；AnyView 用重新锚定后的 world2cam，二者满足 `T_wc = inv(world2cam)`。为了避免锚定带来的混淆，统一在数据集的世界坐标系里计算奖励。
+- **需要单元测试的内容 [待核查]**：
+  1. 用 C_a 把 GT 点投影到 V_a，检查是否落在对应像素上；
+  2. 两边的内参缩放约定：AnyView 的 `scale_intrinsics` 直接乘以 new/orig（`cameras.py:109-126`），像素网格是 0..W−1；OpenD4RT 用 u/(W−1) 归一化。二者可能相差 0.5 像素。
+
+### 3.3 内参缩放
+
+- **AnyView 输入**：用 `snap_shape` 缩放到 576 网格，内参按 `scale_intrinsics` 缩放 [代码确认]。
+- **OpenD4RT 输入**：缩放到 256×256，宽高比 token 取 W/H，缩放方式与 `OD/infer_track_3d.py:37-43` 一致。
+  - 奖励里的投影统一在 256² 分辨率上计算；
+  - 查询坐标用 `u = x/(W−1)`、`v = y/(H−1)`；
+  - K 的缩放约定以投影单元测试的结果为准。
+
+### 3.4 帧数与时间对齐 [设计 + 假设]
+
+- AnyView 生成 **41 帧**。交互时只把**前 40 帧**送给 OpenD4RT。
+  - 这是候选方案，需要按 §6 S1 的共同时间点对照来验证。
+- OpenD4RT 的原生训练仍然用 **48 帧**。
+- 源视频和生成视频逐帧同步；从源数据取帧时，帧间隔选 1 或 2。
+- 不采用"41 帧分散重复成 48 帧"。原因：重复帧会在时间 patch 内造成零运动，帧间隔也不再均匀，与 OpenD4RT 训练时的分布不一致。
+- **[待定]**：生成视频（40 帧）和原生 48 帧的 clip 放进同一个 batch 时怎么拼接。可以分成不同 batch，也可以末尾补帧。
+
+### 3.5 尺度、位置误差与位移误差 [设计]
+
+**第一版固定 t_cam = t₀，把整条轨迹放在同一个坐标系下**；t_cam = t_tgt 留作对照。
+
+- 对锚点 i（在源视频 t₀ 时刻），查询：
+  ```
+  u, v   = π_b(X_GT(i, t₀)) / (W−1, H−1)
+  t_src  = t₀,   t_tgt = t,   t_cam = t₀
+  ```
+- OpenD4RT 的输出是 X̂_c(i,t)，位于相机 b 的 t₀ 帧坐标系下，尺度未知。
+- **参考值**（在相机 b 的 t₀ 帧坐标系下）：
+  ```
+  Y(i,t) = R_b(t₀)ᵀ (X_GT(i,t) − c_b(t₀))
+  ```
+- **尺度只作用于相机坐标，然后再用已知外参变换到世界坐标**：
+  ```
+  X̂_w(i,t) = R_b(t₀) (s · X̂_c(i,t)) + c_b(t₀)
+  ```
+  相机平移不参与缩放。旋转不改变长度，所以下面的误差可以直接在相机坐标下计算。
+- **尺度估计器**：取深度比的中位数。这只是一个估计器，不是任意鲁棒目标的闭式解。
+  ```
+  V⁺ = {(i,t) ∈ V : Y_z > z_min, X̂_z > z_min, 两者都有限}
+  s  = median_{V⁺} ( Y_z / X̂_z )
+  ```
+  - **尺度无效**：|V⁺| < max(N_min, κ·|V|)，或者 s 不是有限正数。这时该候选按最大惩罚计分，即 r = −(w_p + w_d)·c，并记录下来。
+  - 如果一组中大多数候选的尺度都无效，跳过这一组。
+  - z_min、N_min、κ 均为 [待定]。
+- **归一化**：每个锚点的深度 z̄_i = max(Y_z(i, t₀), z_min)。
+- **位置误差和位移误差使用同一个 s**：
+  ```
+  e(i,t) = min( c, ‖ s·X̂_c(i,t) − Y(i,t) ‖ / z̄_i )
+  d(i,t) = min( c, ‖ s·(X̂_c(i,t) − X̂_c(i,t₀)) − (Y(i,t) − Y(i,t₀)) ‖ / z̄_i )
+  ```
+  - **预测无效**：输出不是有限值，或 X̂_z ≤ z_min。这时 e 和 d 都记为 c，不从分母中去掉。
+- **暂不加入**组内的尺度一致性惩罚。
+
+**每个候选单独拟合 s 的已知盲区：**
+
+1. 整体深度按同一比例偏大或偏小时，会被 s 完全吸收，得不到惩罚。
+2. 生成视频隐含的相机平移幅度不对时，只能部分体现在误差里，能体现多少取决于 OpenD4RT 如何理解视差。[假设]
+3. 用 t_cam = t₀ 时，OpenD4RT 必须自己估计从 t₀ 到各时刻的相机运动。它的位姿误差会混进奖励里，但奖励也因此能部分反映"生成视频是否跟随了 C_b"。t_cam = t 的对照版本可以把两者分开。
+
+### 3.6 对应关系的近似
+
+奖励只衡量**"物理点在预期投影位置上的几何"**，不保证生成视频在这个像素上仍然是同一个点。
+
+已知的失效情况：
+
+| 失效情况 | 能否被发现 |
+|---|---|
+| 小物体被删除，背景深度接近 | 可能漏检 |
+| 物体沿深度相近的方向平移 | 可能漏检 |
+| 两个相似物体互换 | 只有两者运动不同时，位移项才能发现 |
+| 运动物体被换成静止背景 | 只有 query 里有足够的动态点时，位移项才能发现 |
+
+这些情况要用 §6 S1 的人为退化测试来检查；测试只能发现一部分漏洞。
+
+---
+
+## 4. AnyView 的 RL 实现规划 [设计]
+
+### 4.1 参数化 [代码确认]
+
+- **缩放系数**：`AV/anyview/vendor/denoiser_scaling.py:31-34`：τ = σ/(1+σ)，c_skip = 1−τ，c_out = −τ，c_in = 1−τ。
+- **状态**：VE 形式 x = x₀ + σε（`AV/scripts/train_dvs.py:170`）。
+- **换算到 rectified flow**：令 z = x/(1+σ)，得到 z = (1−τ)x₀ + τε，并且 x̂₀ = z − τF（`AV/anyview/pipe.py:171`）。
+  - 所以网络原始输出 F 就是 rectified flow 的速度 v̂ = ε − x₀。
+  - 这与 Flow-GRPO 的约定一致：它的 sigma 对应这里的 τ，它的 model_output 对应这里的 F。
+- **噪声调度**：σ ∈ [0.002, 80]，Karras ρ=7，共 35 步（`pipe.py:21`，`AV/anyview/config.py`）。
+  - 对应的 τ_max = 80/81 < 1，不存在 τ = 1 处的奇点。
+- **现有采样器是确定性的**：
+  - 第一步用 Euler（`AV/anyview/vendor/rectified_flow_scheduler.py:131`）；
+  - 之后用依赖上一步 x̂₀ 的 2 阶 Adams-Bashforth（AB2，`:139`）；
+  - `:125` 的注释说明随机扰动（churn）没有实现，`:98` 的 `generator` 参数未被使用。
+- **随机维度只包括 rgb0**：
+  - 只有 rgb0 是输出（`AV/anyview/logistics.py:78`）；
+  - v1 流和两路 cams 通道每一步都被条件输入覆盖（`logistics.py:135`，`pipe.py:175,284`）；
+  - 384×576、41 帧时，D = 16×11×48×72 ≈ 6.1×10⁵。
+- **同组候选靠 seed 区分**：初始噪声由 `arch_invariant_rand(seed*100+v)` 生成（`pipe.py:244-248`）。
+- **训练路径可微**：`pipe.denoise` 对 DiT 参数可微，`train_dvs.py:178` 已经这样用。
+  - `generate`、VAE 解码、PIL 缩放都在 no_grad 下，但它们只出现在 rollout 和评分中。
+
+### 4.2 随机转移（Flow-GRPO 式 SDE，在 z 坐标中计算）
+
+- 时间方向：τ 递减，Δ_i = τ_{i+1} − τ_i < 0。
+- 噪声系数：g_i = a·√(τ_i/(1−τ_i)) = a·√σ_i。
+- 由高斯插值得到的 score：
+  ```
+  ∇log p_τ(z) = −(z + (1−τ)v̂)/τ
+  ```
+- 转移均值：
+  ```
+  μ_θ     = z_i + [ v̂ + (g_i²/(2τ_i)) (z_i + (1−τ_i) v̂) ] Δ_i
+  ```
+- 下一状态：
+  ```
+  z_{i+1} = μ_θ + g_i √(−Δ_i) ξ,   ξ ~ N(0, I_D)
+  ```
+- 与参考实现 `flow_grpo/diffusers_patch/sd3_sde_with_logprob.py:50-68` 逐项对应。
+- x = (1+σ)z 与 z 之间只差一个与 θ 无关的常数雅可比，所以统一在 z 坐标下计算 log-prob。
+- **随机性只作用于 rgb0 通道**，条件通道保持和释放版一致的确定性处理。
+- **端点处理**：
+  - 初始状态沿用 x = 80ε，即 z ≈ 0.988ε；
+  - 最后一步转移之后，释放版在 σ_min 处还会做一次确定性的 x̂₀ 计算（`pipe.py:278-281`），不计入 log-prob，奖励就在这一次的输出上计算。
+- **噪声量级（实算，a = 0.7、35 步）**：
+  - 每步噪声 g√(−Δ)：高 σ 段约 0.29–0.31，σ < 0.1 后降到 0.03 以下；
+  - 修正项系数 g²(−Δ)/(2τ) ≤ 0.052。
+  - 这只说明单步不会数值爆炸；整条链的生成质量需要实测。
+- **a = 0 只用于检查确定性转移**：此时 μ 应精确复现 Euler 采样。零方差高斯没有有效的 log-prob，所以不计算。
+- **与 AB2 的关系**：AB2 依赖上一步的 x̂₀，不能用在随机步上。
+  - 混合窗口的做法：窗口内随机、窗口外确定性，窗口外可以继续用 AB2。这是第二阶段的选项，参考 MixGRPO 和 RL3DEdit 的窗口大小 4。
+  - 必须先通过 §6 S3 的质量验证。
+- **数值精度**：log-prob、概率比和 KL 一律用 **FP32** 计算。参考实现也是先转成 float 再计算（`sd3_sde_with_logprob.py:36-40`）。
+
+### 4.3 log-prob：联合与按维度平均
+
+- **联合 log-prob（精确）**：
+  ```
+  ℓ = Σ_d log N(z_{i+1,d}; μ_d, g_i²(−Δ_i))
+  ```
+- **按维度平均**：ℓ̄ = ℓ / D。参考实现就是这样做的（`sd3_sde_with_logprob.py:89`），并配合 clip 范围 1e-4（`flow_grpo/config/base.py:99`）。
+- **两者定义的概率比不同**：exp(ℓ̄_θ − ℓ̄_old) 等于联合概率比的 1/D 次方。所以两者的信任域和 clipping 语义都不同，按维度平均**不只是**防止溢出。
+- **严格同策略时**：按维度平均的梯度等于精确策略梯度乘以 1/D，只相当于换了学习率。
+- **第一版的选择**：
+  - 采用按维度平均，以便对照参考实现的超参数；
+  - 每批 rollout 只做**一次**优化器更新，所以 clipping 不会被触发，同时记录 clipfrac；
+  - 以后改成多次内循环时，重新确定 ε。
+  - 注意：视频 latent 的维度 D 远大于图像，参考实现的 ε 不能直接照搬。
+
+### 4.4 策略目标与 KL
+
+- **advantage**：组内标准化，截断到 ±5。
+  ```
+  A_i = clip( (r_i − mean_g) / (std_g + 1e−4), −5, 5 )
+  ```
+  - 标准化方式对应 `flow_grpo/scripts/train_sd3.py:766` 和 `flow_grpo/stat_tracking.py`；截断上限来自 `config/base.py:97`。
+  - 组内 std_g < δ 的组跳过，δ [待定]。
+- **策略损失**（对应 `train_sd3.py:886-898`）：
+  ```
+  L_π = −mean_{i, j∈S} min( ρ_ij·A_i , clip(ρ_ij, 1−ε, 1+ε)·A_i )
+  ρ_ij = exp( ℓ̄_θ − ℓ̄_old )
+  ```
+- **KL**：相对 LoRA 关闭的参考模型逐步计算。
+  - 精确形式为同方差高斯之间的 KL：
+    ```
+    KL_j = ‖μ_θ − μ_ref‖² / (2 g_j²(−Δ_j))
+    ```
+    再按维度平均。
+  - 参考实现（`train_sd3.py:900`）只除以 2g²，少了 (−Δ) 这个因子。**第一版用精确形式**，并在代码中注明。
+  - 参考实现的默认 β = 0（`config/base.py:107`）；我们的 β 为 [待定] 的小正值。
+- **AnyView 总目标**：
+  ```
+  L = L_π + β·L_KL        （D4RT GT 分支的 batch）
+    + λ_nat·L_denoise     （Kubric-5D batch，原生损失见 train_dvs.py:153-189）
+  ```
+- **更新范围**：只训练 DiT 的 LoRA 参数。
+  - LoRA 需要在自定义 DiT 上手写，不能直接套 peft；
+  - [待核查]：与 DDP（`find_unused_parameters`）是否兼容，以及保存后能否被 `load_dit` 严格加载。
+
+### 4.5 梯度与同策略约束
+
+- **rollout 和评分**：不带梯度。包括采样、VAE 解码、缩放和 OpenD4RT 前向。
+- **策略重算**：对保存下来的 (z_i, τ_i, z_{i+1})，用 x_i = (1+σ_i)z_i 加上条件通道，重跑一次 `pipe.denoise`，只对 LoRA 求梯度。
+  - [待核查]：DiT 在 `.train()` 和 `.eval()` 下行为是否一致；bf16 下 rollout 与重算之间的数值偏差有多大。
+- **严格同策略的条件**：从一次 rollout 开始，到这批 rollout 的策略梯度计算完成为止，**不能插入任何改变参数的更新**，包括 Kubric 原生监督的更新；否则不能再称为严格同策略。
+  - Kubric 原生损失可以和策略损失放在**同一个优化器步**里，参数相同，所以仍是同策略；
+  - 也可以放在两批 rollout 之间单独更新。
+
+### 4.6 开销
+
+**已知数字（来自 README）：**
+
+| 项目 | 数值 | 出处 |
+|---|---|---|
+| 推理显存 | 约 7 GB（41 帧、576 网格） | `AV/README.md:32` |
+| 全参微调显存 | 68 GB（默认）/ 54 GB（21 帧）/ 46 GB（320 分辨率） | `AV/README.md:302-305` |
+| 优化器状态 | 其中 fp32 主权重加 AdamW 状态占 32 GB | `AV/README.md:302-305` |
+| 单个 episode 推理时间 | H100 上约 25 秒（35 步） | `AV/README.md:209` |
+
+**推算值（未经实测，只作量级参考）：**
+
+- **LoRA 重算的显存**：从全参微调的 68 GB 中去掉 32 GB 优化器状态，估计约 36 GB。
+- **每组计算量**：G = 8、K = 12 时，rollout 约 96 次 DiT 前向。另外还有：
+  - 每个训练步一次前向加反向；
+  - G 次 VAE 解码；
+  - G 次 OpenD4RT 前向。
+- **硬件差异**：RTX 6000 Ada 相对 H100 的速度比例没有实测。
+
+**存储：** 一段 uint8 格式的生成视频约 27 MB，1 万段约 270 GB，建议放在 LSDF。
+
+**所有显存和吞吐数字都要在 S3 实测后更新。**
+
+---
+
+## 5. 用生成数据训练 OpenD4RT 的条件 [设计 + 假设]
+
+- **GT 变换是精确的，不代表生成内容与标签相符。**
+  - 标签由 X_GT 和我们自己选的 C_b 精确算出；
+  - 但生成视频在对应像素上的内容可能是错的。
+- **目标视角可见性来自源视角的 z-buffer，而它是不完整的**：
+  - 做法：在每个时刻 t，把源视频第 t 帧的 GT 深度反投影、再投影到 C_b(t)，在 256² 分辨率上建 z-buffer。容差 max(0.05, 0.02z) 沿用 `depth_query_builder.py:259`。
+  - 每个点的可见性分三种状态：
+    - **可见**：没有已知的更近表面；可能因为源视角没看到遮挡物而判断错误。
+    - **遮挡**：存在已知的更近表面。
+    - **未知**：附近没有 z-buffer 覆盖。
+  - **未知**状态不作为确定的 visibility 标签。
+  - 目标相机的变化幅度保持适中，以减少漏掉的遮挡。
+- **逐字段的监督掩码 [设计]**：
+
+| 字段 | 标签 | 何时提供 |
+|---|---|---|
+| `xyz_3d` | GT 点在 cam_b(t_cam) 坐标系下的位置 | 锚点有效，且通过校验 |
+| `uv_2d` | π_b(X_GT(t_tgt)) | 在 t_tgt 时刻判定为可见 |
+| visibility | 可见或遮挡 | 状态不是未知 |
+| `displacement` | R_b(t_cam)ᵀ (X_GT(t_tgt) − X_GT(t_src)) | GT 在两个时刻都有效 |
+| `normal` | — | 不提供 |
+
+  **[待核查]**：OpenD4RT 原生损失的各项掩码（`d4rt_loss.py`）能否直接接收这些字段级掩码；以及生成视频上 query 的采样方式，建议沿用原生的 t_src/t_tgt/t_cam 采样，只限定在有效锚点上。
+- **校验掩码 M_ver 是启发式的，不证明标签正确。**
+  - 做法：比较 V̂_b(π_b X) 与 V_a(π_a X) 附近 5×5 patch 的颜色，先做每段视频的颜色归一化，在 Lab 空间比较。要求在 t_src 以及大多数可见的 t_tgt 上，差异都小于 τ_ph。
+  - 这个判断不经过 OpenD4RT；但会偏向纹理丰富的区域，而且在反光、无纹理的区域会失效。
+  - 可选：只使用组内 reward 排名靠前的候选。
+- **损失**：
+  ```
+  L = L_9Mix + β_g · L_D4RT(V̂_b ; 标签, M_ver)
+  ```
+  生成视频在 batch 中的比例 [待定]，初始可以取 10–20%。
+- **必须做的公平对照（预算相同）**：
+  1. 只用原生数据，训练相同的额外步数；
+  2. 用 GT 深度前向 warp 源视频得到的伪新视角作增广（带空洞）；
+  3. 生成视频加 M_ver 掩码。
+
+  如果 (3) 不超过 (2)，H2 就不成立。
+
+---
+
+## 6. 分阶段验证与实验
+
+所有阈值都是 [待定]，只是项目内部的判定标准，不是公认标准。
+
+**每个实验都要统一记录的预算：**
+
+- DiT 前向和反向次数，包括选择候选时的生成；
+- VAE 解码次数；
+- OpenD4RT 的 query 数，以及前向和反向次数；
+- GPU 时；
+- 候选数 G。
+
+### S0 数据与环境
+
+- 在计算节点上挂载 `.sqsh`，让各数据加载器指向挂载路径。
+- 逐个数据集确认轨迹、可见性和实例掩码是否可用。
+
+### S1 几何、坐标、尺度、奖励（用真实视频，不需要生成）
+
+- **投影单元测试**：检查 3.2 的两项内容。
+- **40 帧对照**：在带 GT 的 OpenD4RT 验证集（不含 WorldTrack）上，对同一段 48 帧视频，比较"完整 48 帧输入"与"只输入前 40 帧"。只在共同时间点 t∈[0,39]、用同样的 query 比较深度误差和轨迹误差。
+- **C_b = C_a 健全性检查**：把真实源视频当作"生成结果"，计算奖励，得到噪声底。
+- **人为退化测试**：在 C_b = C_a 的设置下，利用 GT 分割对真实帧做以下修改，统计修改后 reward ≥ 原视频 reward 的比例（泄漏率）：
+  - 平移一个物体；
+  - 交换两个相似物体；
+  - 删除一个小物体；
+  - 冻结物体区域；
+  - 整段模糊、去掉纹理。
+
+  **[待核查]**：哪些数据集带实例分割。
+- 这些测试**只能发现一部分漏洞**，不能证明不存在奖励投机。
+
+### S2 AnyView 的相机 scale_factor
+
+- OpenD4RT 的数据集不在 AnyView 的尺度表里，必须选一个值。
+- **不能只看同视角（C_b = C_a）的 PSNR**：同视角时两路相机的 Plücker 编码相同，结果对 scale_factor 可能不敏感。
+- 在非零基线下测试：
+  - 比较 cross 通道的数值分布与训练时的数据集是否相近；
+  - 比较不同 scale_factor 下，生成视频的相机跟随误差（用独立位姿估计器）和 GT 几何奖励。
+- 结论记录为 [待定]。
+
+### S3 采样器、概率重算、显存与吞吐
+
+- **第一步：在 35 步预算下比较三种采样器**：
+  1. AB2（释放版）；
+  2. 确定性 Euler（a = 0）；
+  3. 全程 SDE，a 取若干值。
+
+  数据：Kubric-5D val 加 AnyViewBench 的一个小子集。指标：PSNR、SSIM、LPIPS。
+- **正确性检查**：
+  - a = 0 的转移应精确复现 Euler 采样；
+  - 标准化残差 (z_{i+1} − μ)/(g√(−Δ)) 的均值约为 0、方差约为 1；
+  - 参数不变时重算，|ℓ̄_new − ℓ̄_old| 应在 FP32 或 bf16 的误差范围内。
+- **第二步**：上面都通过后，再试混合窗口，并逐步减到 16、12、10 步。
+- **实测**：LoRA 重算的显存（576 网格和降低分辨率各一次）、rollout 的吞吐。
+
+### S4 同条件下的奖励排序是否可信
+
+- 每组 G 个候选，除 seed 外所有条件都相同：C_b、Q、参考值、尺度规则、OpenD4RT 快照。
+- **组内排序与独立参照的一致性**（Kendall τ）：
+  - NVS 数据上用 GT 目标视频；
+  - D4RT GT 数据上用"GT 投影 + 第二个重建模型"。
+- **重测稳定性**：换一组 query 子集后，排序是否保持。
+- 结果不可信时先修正奖励，不进入训练。
+
+### S5 单向训练
+
+- **AnyView（OpenD4RT 冻结），四组对比**：
+  1. 相同步数的原生微调；
+  2. best-of-G 拒绝采样微调（RAFT）；
+  3. GRPO；
+  4. GRPO 但去掉位移项。
+- **OpenD4RT（AnyView 冻结）**：按 §5 的三组对照。
+
+### S6 双向迭代与换搭档
+
+- 第 1 轮得到 A₁ 和 D₁。
+- 第 2 轮在预算相同的条件下对照：
+  - 训练 AnyView 时，分别用 D₀ 和 D₁ 提供奖励；
+  - 训练 OpenD4RT 时，分别用 A₀ 和 A₁ 生成的缓存。
+- 检验两件事：
+  - 更新后的搭档是否比原始搭档更有帮助；
+  - 最终模型是否超过同等预算的单向训练。
+
+### 评测原则
+
+- **优先使用可用的 GT。** 独立模型只作为辅助参照，**不是真值**；用它之前，要在有 GT 的数据上测出它自身的误差（噪声底）。
+- **不自评分**：用于训练的 OpenD4RT 不作为主要裁判。
+
+**AnyView 的评测：**
+
+| 指标类型 | 评测方式 |
+|---|---|
+| 外观 | AnyViewBench zeroshot（真实数据，Ego-Exo4D 没有像素）和 Kubric5D test 上的 PSNR、SSIM、LPIPS |
+| 几何 | 在有 GT 目标视频的数据上，比较同一个独立模型在 V̂_b 和 V_b 上的重建差异 |
+| 相机 | 用独立位姿估计器，比较 V̂_b 相对 V_a 的位姿与给定的 C_b |
+| 动态轨迹 | 用专门的 2D/3D 跟踪器，先在有 GT 轨迹的数据上校准；VGGT 这类以静态场景为主的模型不适合当裁判 |
+
+- D4RT GT 场景上没有目标 RGB，只能用"GT 投影 + 第二个重建模型"来评测。
+
+**OpenD4RT 的评测：**
+
+- WorldTrack：用仓库自带的 `OD/run_eval_worldtrack.sh`，只用于评测。
+- 其他真实数据的深度、位姿、3D 跟踪基准：[待核查] 可用性。
+
+**数据泄漏**：[待核查] AnyViewBench indist 中的 Kubric-5D episode 是否与 Kubric5D_train 重叠。
+
+---
+
+## 7. 实现模块、待解决问题与参考资料
+
+### 7.1 建议模块（**尚未实现**）
+
+| 模块 | 职责 |
+|---|---|
+| `anyd4rt/geometry.py` | 相机约定转换、内参缩放、投影、z-buffer（三种可见性状态）、尺度估计器 |
+| `anyd4rt/d4rt_critic.py` | 冻结的 OpenD4RT 封装（eval 模式、40 帧、缩放到 256²、宽高比 token），构造 query、输出轨迹 |
+| `anyd4rt/reward_d4rt_gt.py` | D4RT GT 分支的奖励（§3.5）；NVS 分支之后另建模块 |
+| `anyd4rt/anyview_rl/sde.py` | VE 与 RF 坐标换算、SDE 转移、FP32 log-prob、KL |
+| `anyd4rt/anyview_rl/rollout.py` | 无梯度 rollout，保存 (z_i, τ_i, z_{i+1}, ℓ̄_old) |
+| `anyd4rt/anyview_rl/lora.py` | 在 DiT 上注入 LoRA，保存和加载 |
+| `anyd4rt/anyview_rl/train_grpo.py` | GRPO 加 KL 加 Kubric 原生损失，遵守 §4.5 的同策略约束 |
+| `anyd4rt/gen_cache.py` | 离线生成视频，并保存标签和逐字段掩码 |
+| `anyd4rt/train_d4rt_mix.py` | 复用 OpenD4RT 的 Trainer，把原生 9Mix 与生成数据混合 |
+| `anyd4rt/tests/` | 投影单元测试、C_b = C_a 健全性检查、退化测试、采样器和 log-prob 检查 |
+
+子模块代码原则上不改动；需要修改时单独记录。
+
+### 7.2 D4RT GT 分支的最小原型配置 [设计]
+
+- **数据**：先用一个数据集（PointOdyssey 或 DynamicReplica）的 train split，每段 41 帧，帧间隔 1 或 2。
+- **相机 C_b**：
+  - 以 t = 0 时 GT 点的中位点为枢轴 p，以 C_a(0) 的 y 轴为竖直轴；
+  - 把整条源轨迹旋转 θ：c_b(t) = p + R_θ(c_a(t) − p)，R_b(t) = R_θ R_a(t)，K_b = K_a；
+  - 每组从 θ ∈ {±15°, ±30°} 中取一个，全组共用；
+  - 共视覆盖率 < c_min 时换一个 θ，都不满足就跳过这一段。
+- **query**：
+  - 约一半取动态点、约 20% 取边界点；
+  - 时间集 T_e = {0, 4, …, 36}；
+  - 按 OpenD4RT 在真实源视频上的误差 e_a(i) 做门控，全组共用。
+- **组**：G = 8 个候选，只有 seed 不同。
+- **奖励**：
+  ```
+  r = −[ w_p · Σ_V e / |V| + w_d · Σ_{V, t≠t₀} d / |V_d| ]
+  ```
+  分母固定，无效预测按上限 c 计分。
+
+### 7.3 仍需决定或解决的问题
+
+1. AnyView 用于 OpenD4RT 数据集的 scale_factor（S2）。
+2. 释放的 checkpoint 在 SDE 下的质量、log-prob 重算的正确性，以及 DiT 在 train 和 eval 模式下的一致性（S3）。
+3. 40 帧接口（S1）；40 帧和 48 帧 clip 如何混入同一个 batch。
+4. 两边的坐标和内参约定，是否存在 0.5 像素级的偏差（S1）。
+5. 奖励是否可信（S1、S4）；独立评测参照的选择与校准。
+6. 在 48 GB 显卡上的 LoRA 显存和吞吐（S3）；GPU 分工：mrtknecht3 的 8 × RTX 6000 Ada 与 HoreKa 的 A100/H100 各承担哪些工作；sshfs 的数据吞吐。
+7. squashfs 在计算节点上的挂载，以及各数据集可用的轨迹、可见性和实例掩码（S0）。
+8. OpenD4RT 原生损失能否接收字段级掩码；生成视频上 query 的采样方式。
+9. 阈值：z_min、N_min、κ、c、δ、ε、β、λ_nat、β_g、τ_ph、c_min、w_p、w_d。
+10. 数据泄漏检查：AnyViewBench indist 与 Kubric5D_train 是否重叠。
+11. NVS 分支：尺度方案 A 与 B 的选择，以及退化判据。
+
+### 7.4 参考资料
+
+- **AnyView**：[arXiv:2601.16982](https://arxiv.org/abs/2601.16982)，代码见 `AV/`（commit `11b7189`）。
+- **OpenD4RT**：代码见 `OD/`（commit `403290a`）；D4RT 论文 `OD/docs/D4RT_paper.pdf`；权重在 https://huggingface.co/Lijiaxin0111/OpenD4RT 。
+- **Kubric-5D**：https://github.com/TRI-ML/Kubric-5D 。
+- **Flow-GRPO 参考实现**：https://github.com/yifan123/flow_grpo ，已核查 commit `879042c`：
+  - `flow_grpo/diffusers_patch/sd3_sde_with_logprob.py`：SDE 转移和 log-prob；
+  - `scripts/train_sd3.py`：advantage、裁剪后的目标、KL；
+  - `config/base.py`、`config/grpo.py`：默认超参数。
+- **MixGRPO**（随机窗口）：RL3DEdit 的方法部分引用了它。原文链接 [待补]，未核查。
+- **RL3DEdit**："Edit in 2D, Verify in 3D: Reinforcement Learning for Multi-view Consistent Scene Editing"，[arXiv:2603.03143](https://arxiv.org/abs/2603.03143)。
+  - 两个版本写的硬件不同：
+    - **v1**（2026-03-03）：单张 **NVIDIA RTX A6000**，1 个 epoch，42 小时；
+    - **v2**（2026-06-28）：单张 **NVIDIA RTX Pro 6000**，1 个 epoch，42 小时。
+  - 两版的数据规模相同：
+    - 8 个场景（来自 IN2N、BlendedMVS、Mip-NeRF360）；
+    - 70 个编辑 prompt（每个场景 7–9 个）；
+    - 1,319 个训练样本，每个样本是一组 M = 9 视图。
+  - v2 给出的训练设置：
+    - 基于 FLUX-Kontext-dev，LoRA rank 32、alpha 32；
+    - 使用 Flow-GRPO，G = 16，12 步，SDE 噪声 0.8，MixGRPO 窗口 4；
+    - 奖励由 VGGT 的深度置信度、点置信度、位姿误差，加上一个 LPIPS 锚定项组成，四项权重各 0.25。
+  - 它的消融实验报告：
+    - 基于 SfM 的奖励会导致输出缺乏纹理；
+    - 基于光度重投影的奖励会导致输出严重模糊。
+  - KL 系数 β 的具体取值在正文摘录中没有找到，[待核查]。
