@@ -34,16 +34,25 @@
 - **`d4rt/checkpoints/`**：OpenD4RT 的 `OpenD4RT_32CLIP_9Dataset_NoAUG` 和 `OpenD4RT_48CLIP_9Mix_NoCropAUG` 权重，sha256 已与 Hugging Face 核对。
   - `OD/checkpoints/*/opend4rt.ckpt` 以软链接指向这里。
 - **`anyview/checkpoints/`**：AnyView 的 `anyview_dvs_2b.pt`、`tokenizer.pth`、`default_text_emb.pt`，已核对 sha256。
-- **`anyview/data/`**：解压后的 Kubric5D_{train,val,test,tiny} 和 AnyViewBench_{zeroshot,indist}。
-  - `AV/checkpoints` 和 `AV/data` 以软链接指向这里。
-  - 原始压缩包在 `anyview/archives/`。
-- **`anyview/*.sqsh`**：AnyView 数据的 squashfs 版本。
-  - 截至 2026-09-24：val、test、indist 已完成并核对了文件数；train、tiny、zeroshot 的打包作业仍在进行。
-  - 全部完成并核对后，再决定是否删除解压目录和压缩包。
-- **软链接随机器而定**：上面的 `OD/checkpoints/*/opend4rt.ckpt`、`AV/checkpoints`、`AV/data` 是子模块里的本地软链接，不在 git 中，每台机器要各自建。
-  - HoreKa：指向 `/lsdf/kit/mrt/projects/d4rt-data/...`；
-  - mrtknecht3：指向 sshfs 挂载点 `/tmp/kwang-data/...`（目录结构相同）。挂载断开时软链接失效。
-- **挂载方式**：`squashfuse <x>.sqsh <mountpoint>`。
+- **`anyview/*.sqsh`**：AnyView 的数据**只以 squashfs 形式使用**。
+  - 共 6 个镜像：kubric5d_{train,val,test,tiny}.sqsh、anyviewbench_{zeroshot,indist}.sqsh。
+  - 2026-09-25 打包完成：
+    - 6 个镜像的文件数都与解压目录一致；
+    - `tiny` 做了逐文件全量比对，`train` 和 `zeroshot` 做了抽样逐字节比对，均无差异。
+  - 解压目录 `anyview/data/` 和原始压缩包 `anyview/archives/` 已不再使用，待手动删除（约 430 GB）。
+- **AnyView 数据的挂载**：用 `scripts/mount_anyview_sqsh.sh`。
+  - 把 6 个镜像只读挂载到 `/tmp/$USER/anyview-data/<数据集名>/`，子目录名就是 AnyView 期望的名字（`Kubric5D_train/`、`AnyViewBench_zeroshot/` 等）。
+  - 挂载只在当前节点有效：每个读数据的节点都要运行一次，包括每个 sbatch 作业内部。
+  - 卸载：`scripts/mount_anyview_sqsh.sh --unmount`。
+  - 可用环境变量：
+    - `D4RT_DATA_ROOT`：数据根目录，默认是 LSDF 路径；在 mrtknecht3 上设为 `/tmp/kwang-data`；
+    - `ANYVIEW_MNT`：挂载目录，默认 `/tmp/$USER/anyview-data`。
+- **软链接随机器而定**：`OD/checkpoints/*/opend4rt.ckpt`、`AV/checkpoints`、`AV/data` 是子模块里的本地软链接，不在 git 中，每台机器要各自建。
+  - checkpoints：
+    - HoreKa 上指向 `/lsdf/kit/mrt/projects/d4rt-data/...`；
+    - mrtknecht3 上指向 sshfs 挂载点 `/tmp/kwang-data/...`，目录结构相同，sshfs 断开时软链接失效。
+  - `AV/data`：两台机器上都指向 `/tmp/$USER/anyview-data`，也就是上面的 squashfuse 挂载目录。
+- **其他镜像的挂载方式**：`squashfuse <x>.sqsh <mountpoint>`。
   - 计算节点需要 `#SBATCH --constraint=LSDF`。
   - [待核查]：计算节点上能否使用 squashfuse；挂载后的路径能否对上 `OD/configs/train_effective.yaml` 里的 `data/...` 相对路径。
 
@@ -69,6 +78,9 @@
 | `scripts/download_anyview_data.sh` | 下载、校验并解压 AnyView 的数据和权重，可以续传 |
 | `scripts/download_anyview_data.sbatch` | 在 dev_cpuonly 分区提交上面的下载脚本 |
 | `scripts/pack_anyview_sqsh.sbatch` | 打包 squashfs，并核对文件数 |
+| `scripts/mount_anyview_sqsh.sh` | 把 AnyView 的 6 个 `.sqsh` 挂载到 `/tmp/$USER/anyview-data`；加 `--unmount` 卸载 |
+
+`download_anyview_data.sh` 会把数据解压到 `anyview/data/`，并把 `AV/data` 指回那里。现在改为只用 sqsh 后，这个脚本只在需要重新生成镜像时才用；用完要重新运行挂载脚本，并把 `AV/data` 指回挂载目录。
 
 ---
 
