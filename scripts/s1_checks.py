@@ -47,7 +47,7 @@ def parse_args():
     ap.add_argument("--depth-points", type=int, default=256, help="per frame, for the depth check")
     ap.add_argument("--out", default="outputs/s1")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--query-convention", choices=("s1", "d4rt_train"), default="s1",
+    ap.add_argument("--query-convention", choices=("s1", "d4rt_train"), default="d4rt_train",
                     help="s1: u = x/(W-1); d4rt_train: u = (256/W)*x/255, the OpenD4RT loaders' label convention (B2)")
     ap.add_argument("--resummarize", action="store_true", help="rebuild summary.json from an existing clips.json, no model")
     return ap.parse_args()

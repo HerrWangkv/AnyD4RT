@@ -63,12 +63,37 @@ def test_log_prob_and_kl_identities():
     g = torch.Generator().manual_seed(0)
     z, x0, noise = (torch.randn(1000, generator=g, dtype=torch.float64) for _ in range(3))
     z_next, mu, std = sde.step(z, x0, tau, tau_n, a=0.7, noise=noise)
-    lp = sde.log_prob_mean(z_next, mu, std)
+    lp = sde.log_prob(z_next[None], mu[None], std, dtype=torch.float64)
     lp_ref = torch.distributions.Normal(mu, std).log_prob(z_next).mean()
-    assert torch.allclose(lp, lp_ref, atol=1e-12)
-    assert float(sde.kl_mean(mu, mu, std)) == 0.0
+    assert lp.shape == (1,) and torch.allclose(lp[0], lp_ref, atol=1e-12)
+    assert float(sde.kl(mu[None], mu[None], std)[0]) == 0.0
     with pytest.raises(ValueError):
-        sde.log_prob_mean(z_next, mu, 0.0)
+        sde.log_prob(z_next[None], mu[None], 0.0)
+
+
+def test_log_prob_and_kl_keep_batch_dim_and_mask():
+    """GRPO needs one value per candidate; the mask restricts to the target (rgb0) region."""
+    g = torch.Generator().manual_seed(0)
+    B = 4
+    mu = torch.randn(B, 3, 5, 7, generator=g, dtype=torch.float64)
+    z_next = mu + 0.3 * torch.randn(B, 3, 5, 7, generator=g, dtype=torch.float64)
+    z_next[1] += 5.0  # only candidate 1 is off
+    lp = sde.log_prob(z_next, mu, 0.3, dtype=torch.float64)
+    assert lp.shape == (B,) and int(torch.argmin(lp)) == 1
+    per = [float(sde.log_prob(z_next[b:b + 1], mu[b:b + 1], 0.3, dtype=torch.float64)[0]) for b in range(B)]
+    assert torch.allclose(lp, torch.tensor(per, dtype=torch.float64))
+    mask = torch.zeros(1, 3, 5, 7, dtype=torch.bool)
+    mask[:, 0] = True  # e.g. first channel group only
+    lpm = sde.log_prob(z_next, mu, 0.3, mask=mask, dtype=torch.float64)
+    ref = sde.log_prob(z_next[:, :1], mu[:, :1], 0.3, dtype=torch.float64)
+    assert torch.allclose(lpm, ref)
+    k = sde.kl(mu + 0.1, mu, 0.3, mask=mask)
+    assert k.shape == (B,) and k.dtype == torch.float32 and torch.allclose(k, torch.full((B,), 0.01 / 0.18))
+
+
+def test_default_precision_is_fp32():
+    mu = torch.zeros(2, 8, dtype=torch.bfloat16)
+    assert sde.log_prob(mu, mu, 0.5).dtype == torch.float32
 
 
 def test_noise_scale_magnitudes_match_readme():
