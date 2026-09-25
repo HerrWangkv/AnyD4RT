@@ -47,6 +47,8 @@ def parse_args():
     ap.add_argument("--depth-points", type=int, default=256, help="per frame, for the depth check")
     ap.add_argument("--out", default="outputs/s1")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--query-convention", choices=("s1", "d4rt_train"), default="s1",
+                    help="s1: u = x/(W-1); d4rt_train: u = (256/W)*x/255, the OpenD4RT loaders' label convention (B2)")
     ap.add_argument("--resummarize", action="store_true", help="rebuild summary.json from an existing clips.json, no model")
     return ap.parse_args()
 
@@ -151,7 +153,8 @@ def write_summary(rows, out_dir, p, stride, skipped=None):
              if key_a in r and key_b in r and r[key_a].get(sub) is not None and r[key_b].get(sub) is not None]
         return {"mean": float(np.mean(d)), "max": float(np.max(d)), "n_compared": len(d)} if d else None
 
-    summary = {"n_clips": len(rows), "params": p.__dict__, "stride": stride, "skipped": skipped or [],
+    summary = {"n_clips": len(rows), "params": p.__dict__, "stride": stride,
+               "query_convention": rows[0].get("query_convention") if rows else None, "skipped": skipped or [],
                "proj_err_px_median": mean("proj_err_px_median")}
     for T in (48, 40):
         summary[f"depth_T{T}"] = {"absrel_mean_over_clips_with_valid": mean(f"depth_absrel_T{T}"),
@@ -235,11 +238,14 @@ def main():
             Y_loc = Xc_t[:, ids].transpose(1, 0, 2)  # Y_loc(i,t) = T_cw(t) X_GT(i,t)
             V = gt_ok[:, ids].T  # GT-only (C_b = C_a: target visibility = GT visibs)
             dyn = dynamic[ids]
-            uv0 = uv_normalize(px_t[0, ids], (W, H))
-            uv_t = uv_normalize(px_t, (W, H))
+            if a.query_convention == "s1":
+                uv0, uv_t = uv_normalize(px_t[0, ids], (W, H)), uv_normalize(px_t, (W, H))
+            else:  # K scaled multiplicatively to the 256 grid, then normalized by (256 - 1)
+                to_in = np.array([256.0 / W, 256.0 / H])
+                uv0, uv_t = uv_normalize(px_t[0, ids] * to_in, (256, 256)), uv_normalize(px_t * to_in, (256, 256))
             c40 = slice(0, T_INTER)
 
-            row = {"scene": scene.name, "start": int(start), "stride": a.stride, "n_anchor": len(ids), "n_dyn": int(dyn.sum()),
+            row = {"scene": scene.name, "start": int(start), "stride": a.stride, "query_convention": a.query_convention, "n_anchor": len(ids), "n_dyn": int(dyn.sum()),
                    "proj_err_px_median": float(np.median(proj_err)), "proj_err_px_p99": float(np.percentile(proj_err, 99))}
             depth_frames = np.arange(0, T_INTER, 4)
             for tag, clip in (("T48", frames), ("T40", frames[:T_INTER]), ("frozen_T40", np.repeat(frames[:1], T_INTER, 0))):
