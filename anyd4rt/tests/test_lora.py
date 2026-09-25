@@ -50,7 +50,8 @@ def test_init_is_reproducible_and_switch_works():
             m.lora_B.normal_()
     assert not torch.allclose(a(x), y0)
     lora.set_enabled(a, False)
-    assert torch.equal(a(x), y0)
+    with torch.no_grad():  # LoRA-off forwards are reference forwards and must be no-grad
+        assert torch.equal(a(x), y0)
 
 
 def test_gradients_through_block_checkpoint_match():
@@ -67,3 +68,42 @@ def test_gradients_through_block_checkpoint_match():
         net(x).pow(2).mean().backward()
         grads.append(torch.cat([p.grad.flatten() for p in lora.lora_parameters(net)]))
     assert torch.allclose(grads[0], grads[1], atol=1e-6)
+
+
+def test_disabled_lora_requires_no_grad_including_checkpoint_recompute():
+    import pytest
+    net = _Net()
+    lora.inject(net, rank=4)
+    lora.enable_block_checkpoint(net)
+    x = torch.randn(4, 16)
+    lora.set_enabled(net, False)
+    with torch.no_grad():
+        net(x)  # reference forward: fine
+    with pytest.raises(RuntimeError):
+        net(x)  # grad-enabled forward with LoRA off
+    lora.set_enabled(net, True)
+    loss = net(x).pow(2).mean()
+    lora.set_enabled(net, False)  # switching off between policy forward and backward must be caught
+    with pytest.raises(RuntimeError):
+        loss.backward()
+    lora.set_enabled(net, True)
+
+
+def test_save_load_roundtrip_across_checkpoint_wrapping():
+    a = _Net()
+    wa = lora.inject(a, rank=4, seed=0)
+    lora.enable_block_checkpoint(a)
+    with torch.no_grad():
+        for m in wa:
+            m.lora_B.normal_()
+    sd = lora.lora_state_dict(a)
+    assert all("_checkpoint_wrapped_module" not in k for k in sd)
+    b = _Net()
+    lora.inject(b, rank=4, seed=7)  # different init, no checkpointing
+    lora.load_lora_state_dict(b, sd)
+    x = torch.randn(4, 16)
+    with torch.no_grad():
+        assert torch.equal(a(x), b(x))
+    import pytest
+    with pytest.raises(KeyError):
+        lora.load_lora_state_dict(b, {k: v for k, v in list(sd.items())[1:]})

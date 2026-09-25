@@ -34,6 +34,11 @@ class LoRALinear(nn.Module):
     def forward(self, x):
         y = self.base(x)
         if not self.enabled:
+            # LoRA off = reference policy, only valid without grad. This also catches a policy forward, or the
+            # recomputation inside a checkpointed backward, running while LoRA is switched off.
+            if torch.is_grad_enabled():
+                raise RuntimeError("LoRA is disabled inside a grad-enabled forward (reference forward must use no_grad; "
+                                   "re-enable LoRA before the policy forward and its backward)")
             return y
         return y + (x @ self.lora_A.to(x.dtype).t() @ self.lora_B.to(x.dtype).t()) * self.scale
 
@@ -65,8 +70,24 @@ def set_enabled(model: nn.Module, enabled: bool):
             m.enabled = enabled
 
 
+_CKPT = "._checkpoint_wrapped_module"
+
+
 def lora_state_dict(model: nn.Module):
-    return {n: p.detach().cpu() for n, p in model.named_parameters() if "lora_" in n}
+    """LoRA tensors only, with checkpoint-wrapper segments stripped from the names (so a model saved with
+    block checkpointing loads into one without, and vice versa)."""
+    return {n.replace(_CKPT, ""): p.detach().cpu().clone() for n, p in model.named_parameters() if "lora_" in n}
+
+
+def load_lora_state_dict(model: nn.Module, sd: dict):
+    """Strict: every LoRA tensor of `model` must be in `sd` with the same shape, and nothing extra."""
+    params = {n.replace(_CKPT, ""): p for n, p in model.named_parameters() if "lora_" in n}
+    missing, extra = sorted(set(params) - set(sd)), sorted(set(sd) - set(params))
+    if missing or extra:
+        raise KeyError(f"LoRA state mismatch: missing {missing[:3]}, unexpected {extra[:3]}")
+    with torch.no_grad():
+        for n, p in params.items():
+            p.copy_(sd[n].to(device=p.device, dtype=p.dtype))
 
 
 def enable_block_checkpoint(dit: nn.Module):
