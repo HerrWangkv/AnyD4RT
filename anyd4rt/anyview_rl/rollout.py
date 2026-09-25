@@ -86,21 +86,28 @@ def sample(pipe, entries, seed=0, num_steps=35, mode="ab2", a=0.0, noise_seed=0,
     return Rollout(assemble_clean_predictions(x0_streams, final, masks), steps)
 
 
-@torch.no_grad()
-def recompute_log_prob(pipe, entries, step_rec, num_steps=35, a=0.7, other_state=None):
-    """Recompute log p(z_{i+1} | z_i) with a fresh network call (README §4.5 policy recomputation).
+def step_log_prob(pipe, entries, step_rec, num_steps=35, a=0.7, other_state=None):
+    """log p(z_{i+1} | z_i) of a recorded step under the CURRENT network parameters, with a fresh network call.
 
-    Only the output region of the recorded stream matters for the network input; `other_state`
-    optionally fills every other stream / channel (e.g. with random values) to check that.
+    No no_grad: under torch.enable_grad() this is the policy recomputation of README §4.5 (gradients flow
+    into trainable parameters such as LoRA). Only the output region of the recorded stream affects the
+    network input; `other_state` optionally fills every other stream / channel.
+    Returns (log_prob [B], mu).
     """
-    x0_streams, masks, crossattn, start = _setup(pipe, entries, 0, num_steps)
-    i, k = step_rec["i"], step_rec["stream"]
-    sig = pipe.scheduler.sigmas.double()
-    s_t, s_s = float(sig[i]), float(sig[i + 1])
-    state = other_state if other_state is not None else {kk: torch.zeros_like(v) for kk, v in start.items()}
-    state = dict(state)
-    om = masks["output"][k].bool()
-    state[k] = torch.where(om, step_rec["x"], state[k])  # the exact float32 state the rollout fed to the network
+    with torch.no_grad():
+        x0_streams, masks, crossattn, start = _setup(pipe, entries, 0, num_steps)
+        i, k = step_rec["i"], step_rec["stream"]
+        sig = pipe.scheduler.sigmas.double()
+        s_t, s_s = float(sig[i]), float(sig[i + 1])
+        state = dict(other_state) if other_state is not None else {kk: torch.zeros_like(v) for kk, v in start.items()}
+        om = masks["output"][k].bool()
+        state[k] = torch.where(om, step_rec["x"], state[k])  # the exact float32 state the rollout fed to the network
     _, y0 = pipe.denoise(x0_streams, state, masks, sigma_in(pipe, i, state), crossattn)
     mu, std = sde.transition_mean_std(sde.x_to_z(state[k].double(), s_t), y0[k].double(), sde.tau_of(s_t), sde.tau_of(s_s), a)
     return sde.log_prob(step_rec["z_next"], mu, std, mask=om), mu
+
+
+@torch.no_grad()
+def recompute_log_prob(pipe, entries, step_rec, num_steps=35, a=0.7, other_state=None):
+    """No-grad version of step_log_prob, for checks."""
+    return step_log_prob(pipe, entries, step_rec, num_steps=num_steps, a=a, other_state=other_state)
