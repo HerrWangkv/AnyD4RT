@@ -62,17 +62,25 @@ def reward_d4rt_gt(pred_xc: np.ndarray, Y: np.ndarray, V: np.ndarray, t0: int, p
 
     def capped(err, pred_finite):
         # Invalid prediction -> cap; V unchanged. Anchor-level invalidity caps the whole row.
-        return np.where(anchor_bad | ~pred_finite | ~np.isfinite(err), p.c, np.minimum(p.c, err))
+        invalid = anchor_bad | ~pred_finite | ~np.isfinite(err)
+        return np.where(invalid, p.c, np.minimum(p.c, err)), invalid
 
     with np.errstate(invalid="ignore"):
-        e = capped(np.linalg.norm(s * pred_xc - Y, axis=-1) / zbar, finite)
-        d = capped(np.linalg.norm(s * (pred_xc - pred_xc[:, t0:t0 + 1]) - (Y - Y[:, t0:t0 + 1]), axis=-1) / zbar, finite)
-        e_loc = capped(np.linalg.norm(s * pred_loc - Y_loc, axis=-1) / zbar, np.isfinite(pred_loc).all(-1)) if n_vl else None
+        e, inv_e = capped(np.linalg.norm(s * pred_xc - Y, axis=-1) / zbar, finite)
+        d, inv_d = capped(np.linalg.norm(s * (pred_xc - pred_xc[:, t0:t0 + 1]) - (Y - Y[:, t0:t0 + 1]), axis=-1) / zbar, finite)
+        if n_vl:
+            e_loc, inv_l = capped(np.linalg.norm(s * pred_loc - Y_loc, axis=-1) / zbar, np.isfinite(pred_loc).all(-1))
+        else:
+            e_loc = inv_l = None
 
     e_mean = float(e[V].mean())
     d_mean = float(d[V_d].mean()) if n_vd else None
     eloc_mean = float(e_loc[V_loc].mean()) if n_vl else None
     r = -(p.w_p * e_mean + (p.w_d * d_mean if n_vd else 0.0) + (p.w_loc * eloc_mean if n_vl else 0.0))
-    out.update(r=r, scale_valid=True, e_mean=e_mean, d_mean=d_mean, eloc_mean=eloc_mean, e=e, d=d, e_loc=e_loc,
-               n_capped=int(((anchor_bad | ~finite) & V).sum()))
+    out.update(r=r, scale_valid=True, e_mean=e_mean, d_mean=d_mean, eloc_mean=eloc_mean, e=e, d=d, e_loc=e_loc)
+    # Diagnostics, per term over its own set: invalid predictions, and all entries sitting at the cap c
+    # (invalid ones plus finite errors >= c). A high cap fraction means the term is saturated.
+    for name, err, inv, mask, n in (("e", e, inv_e, V, n_v), ("d", d, inv_d, V_d, n_vd), ("eloc", e_loc, inv_l, V_loc, n_vl)):
+        out[f"n_invalid_{name}"] = int((inv & mask).sum()) if n else 0
+        out[f"frac_capped_{name}"] = float((err[mask] >= p.c).mean()) if n else None
     return out

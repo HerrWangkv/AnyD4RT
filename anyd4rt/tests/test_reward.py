@@ -111,3 +111,24 @@ def test_scale_invalid_penalty_includes_local_term():
     pred[:40, 0, 2] = -1.0
     out = reward_d4rt_gt(pred, Y, V, t0=0, p=P, pred_loc=Y_loc.copy(), Y_loc=Y_loc)
     assert out["scale_valid"] is False and out["r"] == -P.c * (P.w_p + P.w_d + P.w_loc)
+
+
+def test_cap_diagnostics_count_large_finite_errors():
+    Y, V = _scene()
+    pred = Y.copy()
+    pred[:24, 2:] += 100.0  # finite but far beyond the cap
+    out = reward_d4rt_gt(pred, Y, V, t0=0, p=P)
+    assert out["n_invalid_e"] == 0
+    assert np.isclose(out["frac_capped_e"], (24 * (Y.shape[1] - 2)) / V.sum())
+    pred[:4, 5] = np.nan
+    out = reward_d4rt_gt(pred, Y, V, t0=0, p=P)
+    assert out["n_invalid_e"] == 4 and out["n_invalid_d"] == 4
+
+
+def test_cap_diagnostics_local_term():
+    Y, Y_loc, V = _static_scene_moving_camera()
+    bad = Y_loc + 50.0
+    bad[:3, 1] = np.nan
+    out = reward_d4rt_gt(Y.copy(), Y, V, t0=0, p=P, pred_loc=bad, Y_loc=Y_loc)
+    assert out["n_invalid_eloc"] == 3 and out["frac_capped_eloc"] == 1.0
+    assert out["frac_capped_e"] == 0.0

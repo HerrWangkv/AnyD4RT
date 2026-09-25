@@ -42,6 +42,12 @@ def prepare_video(frames_rgb: np.ndarray, device: str, image_hw=(256, 256)) -> t
 
 
 @torch.no_grad()
+def encode(model, video, aspect):
+    """Encode a video once; pass the result as `memory` to every run_queries call on the same video."""
+    return _encode_model_memory(model=model, video_b=video, aspect_b=aspect)
+
+
+@torch.no_grad()
 def run_queries(model, video, aspect, uv, t_src, t_tgt, t_cam, chunk: int = 8192, memory=None) -> dict[str, np.ndarray]:
     dev = video.device
     q = {
@@ -52,6 +58,6 @@ def run_queries(model, video, aspect, uv, t_src, t_tgt, t_cam, chunk: int = 8192
         "t_cam": torch.as_tensor(t_cam, dtype=torch.long, device=dev),
     }
     if memory is None:
-        memory = _encode_model_memory(model=model, video_b=video, aspect_b=aspect)
+        memory = encode(model, video, aspect)
     pred = _run_model_for_queries(model=model, video_b=video, aspect_b=aspect, query=q, chunk_size=chunk, memory_b=memory)
     return {k: v.numpy() for k, v in pred.items()}
