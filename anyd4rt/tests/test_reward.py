@@ -1,0 +1,113 @@
+import numpy as np
+
+from anyd4rt.reward_d4rt_gt import RewardParams, reward_d4rt_gt
+
+P = RewardParams(z_min=1e-3, c=1.0, n_min=4, kappa=0.5)
+
+
+def _scene(n=64, t=8, seed=0):
+    rng = np.random.default_rng(seed)
+    Y = rng.normal(size=(n, t, 3))
+    Y[:, 0, 2] = rng.uniform(1.0, 5.0, size=n)  # anchors in front of the camera at t0
+    Y[:, 1:] = Y[:, :1] + 0.1 * rng.normal(size=(n, t - 1, 3)).cumsum(1)
+    return Y, np.ones((n, t), bool)
+
+
+def test_exact_up_to_scale_gives_zero():
+    Y, V = _scene()
+    out = reward_d4rt_gt(Y / 3.7, Y, V, t0=0, p=P)
+    assert out["scale_valid"] and abs(out["s"] - 3.7) < 1e-9
+    assert abs(out["r"]) < 1e-9
+
+
+def test_nonfinite_prediction_keeps_V_and_is_capped():
+    Y, V = _scene()
+    pred = Y.copy()
+    pred[:10, 3] = np.nan
+    out = reward_d4rt_gt(pred, Y, V, t0=0, p=P)
+    assert out["n_V"] == V.sum()
+    assert np.all(out["e"][:10, 3] == P.c) and np.all(out["d"][:10, 3] == P.c)
+    assert out["r"] < 0
+
+
+def test_negative_z_after_t0_not_penalized():
+    Y, V = _scene()
+    Y[:5, 4:, 2] = -2.0  # object moves behind the t0 camera plane
+    out = reward_d4rt_gt(Y.copy(), Y, V, t0=0, p=P)
+    assert abs(out["r"]) < 1e-9
+
+
+def test_empty_Vd_disables_displacement():
+    Y, V = _scene()
+    V[:, 1:] = False
+    out = reward_d4rt_gt(Y.copy(), Y, V, t0=0, p=P)
+    assert out["n_Vd"] == 0 and not out["use_d"] and out["d_mean"] is None
+    assert np.isfinite(out["r"])
+
+
+def test_scale_invalid_gets_max_penalty():
+    Y, V = _scene()
+    pred = Y.copy()
+    pred[:40, 0, 2] = -1.0  # most anchors unfit for scale fitting -> |V+| < kappa*|Q0|
+    out = reward_d4rt_gt(pred, Y, V, t0=0, p=P)
+    assert out["scale_valid"] is False and out["r"] == -(P.w_p + P.w_d) * P.c
+
+
+def test_denominators_do_not_depend_on_prediction():
+    Y, V = _scene()
+    rng = np.random.default_rng(1)
+    a = reward_d4rt_gt(Y.copy(), Y, V, t0=0, p=P)
+    pred = Y + rng.normal(size=Y.shape)
+    pred[rng.random(pred.shape[:2]) < 0.3] = np.inf
+    b = reward_d4rt_gt(pred, Y, V, t0=0, p=P)
+    assert (a["n_V"], a["n_Vd"], a["n_Q0"]) == (b["n_V"], b["n_Vd"], b["n_Q0"])
+    assert b["r"] < a["r"]
+
+
+def _static_scene_moving_camera(n=64, t=8, seed=0):
+    """Static world points, camera translating along x. Returns Y (t0 frame), Y_loc (per-frame), V."""
+    rng = np.random.default_rng(seed)
+    Xw = np.stack([rng.uniform(-1, 1, n), rng.uniform(-1, 1, n), rng.uniform(3, 6, n)], -1)
+    cam_x = np.linspace(0, 1.0, t)  # camera centers c(t) = (cam_x, 0, 0), identity rotation
+    Y = np.repeat(Xw[:, None], t, 1)  # cam(t0) = world
+    Y_loc = Xw[:, None] - np.stack([cam_x, np.zeros(t), np.zeros(t)], -1)[None]
+    return Y, Y_loc, np.ones((n, t), bool)
+
+
+def test_local_term_penalizes_not_following_camera():
+    Y, Y_loc, V = _static_scene_moving_camera()
+    # "Frozen" candidate: world looks static and the camera never moves -> local prediction stays at the t0 view.
+    frozen_loc = np.repeat(Y_loc[:, :1], Y.shape[1], 1)
+    t0_only = reward_d4rt_gt(Y.copy(), Y, V, t0=0, p=P)
+    frozen = reward_d4rt_gt(Y.copy(), Y, V, t0=0, p=P, pred_loc=frozen_loc, Y_loc=Y_loc)
+    follow = reward_d4rt_gt(Y.copy(), Y, V, t0=0, p=P, pred_loc=Y_loc.copy(), Y_loc=Y_loc)
+    assert abs(t0_only["r"]) < 1e-9  # the t0-frame terms alone cannot see it (S1 finding)
+    assert abs(follow["r"]) < 1e-9
+    assert frozen["eloc_mean"] > 0.05 and frozen["r"] < follow["r"]
+
+
+def test_local_term_uses_t0_scale_and_excludes_t0():
+    Y, Y_loc, V = _static_scene_moving_camera()
+    out = reward_d4rt_gt(Y / 2.0, Y, V, t0=0, p=P, pred_loc=Y_loc / 2.0, Y_loc=Y_loc)
+    assert abs(out["s"] - 2.0) < 1e-9 and abs(out["r"]) < 1e-9
+    assert out["n_Vloc"] == V[:, 1:].sum()
+
+
+def test_local_nonfinite_capped_and_empty_Vloc_disabled():
+    Y, Y_loc, V = _static_scene_moving_camera()
+    bad = Y_loc.copy()
+    bad[:8, 2] = np.nan
+    out = reward_d4rt_gt(Y.copy(), Y, V, t0=0, p=P, pred_loc=bad, Y_loc=Y_loc)
+    assert np.all(out["e_loc"][:8, 2] == P.c) and out["n_Vloc"] == V[:, 1:].sum()
+    V1 = V.copy()
+    V1[:, 1:] = False
+    out = reward_d4rt_gt(Y.copy(), Y, V1, t0=0, p=P, pred_loc=Y_loc.copy(), Y_loc=Y_loc)
+    assert not out["use_loc"] and out["eloc_mean"] is None and np.isfinite(out["r"])
+
+
+def test_scale_invalid_penalty_includes_local_term():
+    Y, Y_loc, V = _static_scene_moving_camera()
+    pred = Y.copy()
+    pred[:40, 0, 2] = -1.0
+    out = reward_d4rt_gt(pred, Y, V, t0=0, p=P, pred_loc=Y_loc.copy(), Y_loc=Y_loc)
+    assert out["scale_valid"] is False and out["r"] == -P.c * (P.w_p + P.w_d + P.w_loc)

@@ -1,3 +1,4 @@
 logs/
 *.pdf
 .venv/
+outputs/
