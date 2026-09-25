@@ -132,3 +132,32 @@ def test_cap_diagnostics_local_term():
     out = reward_d4rt_gt(Y.copy(), Y, V, t0=0, p=P, pred_loc=bad, Y_loc=Y_loc)
     assert out["n_invalid_eloc"] == 3 and out["frac_capped_eloc"] == 1.0
     assert out["frac_capped_e"] == 0.0
+
+
+def test_anchor_gate_removes_anchors_everywhere():
+    Y, V = _scene()
+    pred = Y.copy()
+    pred[:8] += 10.0  # the first 8 anchors are badly predicted
+    gate = np.ones(len(Y), bool)
+    gate[:8] = False
+    full = reward_d4rt_gt(pred, Y, V, t0=0, p=P)
+    gated = reward_d4rt_gt(pred, Y, V, t0=0, p=P, anchor_gate=gate)
+    ref = reward_d4rt_gt(pred[8:], Y[8:], V[8:], t0=0, p=P)
+    assert gated["n_V"] == V[8:].sum() and gated["n_Q0"] == ref["n_Q0"]
+    assert np.isclose(gated["r"], ref["r"]) and gated["r"] > full["r"]
+
+
+def test_balance_equal_weights_static_dynamic():
+    Y, V = _scene(n=64)
+    dyn = np.zeros(64, bool)
+    dyn[:16] = True  # 16 dynamic, 48 static
+    pred = Y.copy()
+    pred[:16, 1:] += 0.5  # only dynamic anchors are wrong after t0
+    out = reward_d4rt_gt(pred, Y, V, t0=0, p=P, balance=dyn)
+    e = out["e"]
+    expect = 0.5 * (e[16:][V[16:]].mean() + e[:16][V[:16]].mean())
+    assert np.isclose(out["e_mean"], expect)
+    pooled = reward_d4rt_gt(pred, Y, V, t0=0, p=P)
+    assert out["e_mean"] > pooled["e_mean"]  # the minority group now counts for half
+    only_static = reward_d4rt_gt(pred, Y, V, t0=0, p=P, balance=np.zeros(64, bool))
+    assert np.isclose(only_static["e_mean"], pooled["e_mean"])  # one empty group -> plain mean

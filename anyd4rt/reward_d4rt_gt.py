@@ -24,7 +24,8 @@ class RewardParams:
 
 
 def reward_d4rt_gt(pred_xc: np.ndarray, Y: np.ndarray, V: np.ndarray, t0: int, p: RewardParams = RewardParams(),
-                   pred_loc: np.ndarray | None = None, Y_loc: np.ndarray | None = None) -> dict:
+                   pred_loc: np.ndarray | None = None, Y_loc: np.ndarray | None = None,
+                   anchor_gate: np.ndarray | None = None, balance: np.ndarray | None = None) -> dict:
     """Scalar reward for one candidate.
 
     pred_xc:  [N,T,3] OpenD4RT xyz for queries (t_src=t0, t_tgt=t, t_cam=t0), in cam_b(t0) frame, unknown scale.
@@ -33,9 +34,15 @@ def reward_d4rt_gt(pred_xc: np.ndarray, Y: np.ndarray, V: np.ndarray, t0: int, p
     pred_loc: [N,T,3] optional, queries (t_src=t0, t_tgt=t, t_cam=t), in cam_b(t) frame.
     Y_loc:    [N,T,3] optional, GT reference R_b(t)^T (X_GT(i,t) - c_b(t)).
     Without pred_loc the local term is off (w_loc ignored).
+    anchor_gate: [N] bool, optional. Fixed per group (e.g. source-side reliability, same for every candidate):
+                 anchors with False are removed from V, and therefore from the scale fit and every denominator.
+    balance:     [N] bool (dynamic flag from GT motion), optional. Each term is the mean of its static-group mean and
+                 its dynamic-group mean (one group empty -> the other group's mean) instead of the pooled mean.
     """
     N, T, _ = Y.shape
     V = V.astype(bool)
+    if anchor_gate is not None:
+        V = V & np.asarray(anchor_gate, bool)[:, None]
     not_t0 = (np.arange(T) != t0)[None, :]
     V_d = V & not_t0 & V[:, t0:t0 + 1]
     V_loc = V & not_t0 if pred_loc is not None else np.zeros_like(V)
@@ -73,9 +80,16 @@ def reward_d4rt_gt(pred_xc: np.ndarray, Y: np.ndarray, V: np.ndarray, t0: int, p
         else:
             e_loc = inv_l = None
 
-    e_mean = float(e[V].mean())
-    d_mean = float(d[V_d].mean()) if n_vd else None
-    eloc_mean = float(e_loc[V_loc].mean()) if n_vl else None
+    def agg(err, mask):
+        if balance is None:
+            return float(err[mask].mean())
+        parts = [err[mask & g[:, None]] for g in (~np.asarray(balance, bool), np.asarray(balance, bool))]
+        parts = [x.mean() for x in parts if x.size]
+        return float(np.mean(parts))
+
+    e_mean = agg(e, V)
+    d_mean = agg(d, V_d) if n_vd else None
+    eloc_mean = agg(e_loc, V_loc) if n_vl else None
     r = -(p.w_p * e_mean + (p.w_d * d_mean if n_vd else 0.0) + (p.w_loc * eloc_mean if n_vl else 0.0))
     out.update(r=r, scale_valid=True, e_mean=e_mean, d_mean=d_mean, eloc_mean=eloc_mean, e=e, d=d, e_loc=e_loc)
     # Diagnostics, per term over its own set: invalid predictions, and all entries sitting at the cap c
