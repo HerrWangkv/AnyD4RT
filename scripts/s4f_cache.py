@@ -50,6 +50,8 @@ def main():
     ap.add_argument("--theta", type=float, required=True)
     ap.add_argument("--seeds", default="0,1,2,3,4,5,6,7")
     ap.add_argument("--person-id", type=int, default=-1)
+    ap.add_argument("--init-seed", type=int, default=-1,
+                    help=">= 0: fix the starting latent to this seed and vary only the SDE noise (cand_XX = noise seed XX)")
     ap.add_argument("--out", default=str(ROOT / "outputs" / "s4cache"))
     a = ap.parse_args()
     from anyview.config import AnyViewConfig
@@ -62,7 +64,7 @@ def main():
     pipe = load_pipeline(config, device)
     critic = load_d4rt(str(ROOT / "third_party/Open-d4rt/checkpoints/OpenD4RT_48CLIP_9Mix_NoCropAUG"))
     p = RewardParams()
-    gdir = Path(a.out) / f"{a.scene}@{a.start}_theta{a.theta:g}"
+    gdir = Path(a.out) / (f"{a.scene}@{a.start}_theta{a.theta:g}" + (f"_init{a.init_seed}" if a.init_seed >= 0 else ""))
     gdir.mkdir(parents=True, exist_ok=True)
     scene = Path("/tmp/kwang-mnt/pointodyssey/v2/val") / a.scene
     clip = po_episode.load_clip(scene, a.start, 2)
@@ -120,12 +122,13 @@ def main():
         if f.exists():
             continue
         t0 = time.time()
-        r = rollout.sample(pipe, entries, seed=seed, num_steps=35, mode="sde", a=0.7, noise_seed=seed)
+        init = a.init_seed if a.init_seed >= 0 else seed
+        r = rollout.sample(pipe, entries, seed=init, num_steps=35, mode="sde", a=0.7, noise_seed=seed)
         gen = s4a.to_uint8(b4.decode(vae, r.y0_pred_streams))
         pr, pl = s4b.predict(critic, gen, g["uv0"])
         rr = reward_d4rt_gt(pr, g["Y"], g["V"], 0, p, pl, g["Y_loc"])["r"]
-        np.savez_compressed(f, video=gen, pr=pr, pl=pl, r=rr)
-        print(json.dumps({"group": gdir.name, "seed": seed, "r": rr, "sec": round(time.time() - t0, 1)}), flush=True)
+        np.savez_compressed(f, video=gen, pr=pr, pl=pl, r=rr, init_seed=init, noise_seed=seed)
+        print(json.dumps({"group": gdir.name, "init_seed": init, "noise_seed": seed, "r": rr, "sec": round(time.time() - t0, 1)}), flush=True)
 
 
 if __name__ == "__main__":
