@@ -7,9 +7,9 @@ Per group (8 candidates, reward config A):
                 over candidates (score noise from the query subset);
   snr           sigma_group / sigma_query; split-half Kendall tau of the ranking (mean over splits);
   appearance    pairwise PSNR / LPIPS between candidates (AnyView's RGBEvaluation, 576 grid);
-  geometry      critic-free alignment reference per candidate (static / dynamic shift, grid px, search +-32);
-                a shift >= 30 px counts as saturated; the reference is "usable" for the group only if at most 2 of 8
-                candidates are saturated on static points; otherwise its ranking is reported as not judgeable.
+  geometry      critic-free alignment reference per candidate (static / dynamic shift, grid px, search +-32); the static
+                and the dynamic reference are validated separately (s4_common: missing values are not OK, >= 30 px is
+                saturated, >= 75% of candidates must be OK and the OK values must vary); correlations report n.
 """
 
 from __future__ import annotations
@@ -35,11 +35,13 @@ import importlib.util  # noqa: E402
 _g = importlib.util.spec_from_file_location("s4g", ROOT / "scripts" / "s4g_gate_offline.py")
 s4g = importlib.util.module_from_spec(_g)
 _g.loader.exec_module(s4g)
+_c = importlib.util.spec_from_file_location("s4_common", ROOT / "scripts" / "s4_common.py")
+s4c = importlib.util.module_from_spec(_c)
+_c.loader.exec_module(s4c)
 _e = importlib.util.spec_from_file_location("av_eval", AV / "scripts" / "eval_avb.py")
 eval_lib = importlib.util.module_from_spec(_e)
 _e.loader.exec_module(eval_lib)
 P = RewardParams()
-SAT = 30.0
 
 
 def main():
@@ -87,17 +89,16 @@ def main():
             if str(s_) not in ref:
                 ref[str(s_)] = s4g.alignment_reference(g, c["video"])
         ref_path.write_text(json.dumps(ref))
-        st = np.array([ref[str(s_)]["static"] if ref[str(s_)]["static"] is not None else np.nan for s_ in seeds])
-        dy = np.array([ref[str(s_)]["dynamic"] if ref[str(s_)]["dynamic"] is not None else np.nan for s_ in seeds])
-        n_sat = int(np.sum(st >= SAT))
-        usable = n_sat <= 2
+        st = s4c.ref_values(ref, seeds, "static")
+        dy = s4c.ref_values(ref, seeds, "dynamic")
+        tv_st, tv_dy = s4c.tau_vs_ref(r, st), s4c.tau_vs_ref(r, dy)
         res[spec] = {"seeds": seeds, "rewards": r.tolist(), "sigma_group": sigma_g, "sigma_query": sigma_q, "snr": sigma_g / sigma_q,
                      "reward_range": float(r.max() - r.min()), "split_half_tau": float(np.nanmean(taus)),
                      "pair_psnr_mean": float(np.mean([x["psnr"] for x in pair])), "pair_lpips_mean": float(np.mean([x["lpips"] for x in pair])),
-                     "ref_static_px": st.tolist(), "ref_dynamic_px": dy.tolist(), "ref_static_std": float(np.nanstd(st)), "ref_dynamic_std": float(np.nanstd(dy)),
-                     "ref_n_saturated_static": n_sat, "ref_usable": usable,
-                     "tau_reward_vs_ref_static": s4g.kendall(r, -st) if usable else None,
-                     "tau_reward_vs_ref_dynamic": s4g.kendall(r, -dy) if usable else None}
+                     "ref_static_px": st.tolist(), "ref_dynamic_px": dy.tolist(),
+                     "ref_static_validity": tv_st["validity"], "ref_dynamic_validity": tv_dy["validity"],
+                     "tau_reward_vs_ref_static": tv_st["tau"], "n_tau_static": tv_st["n"],
+                     "tau_reward_vs_ref_dynamic": tv_dy["tau"], "n_tau_dynamic": tv_dy["n"]}
         print(json.dumps({"group": spec, **{k: (round(v, 3) if isinstance(v, float) else v) for k, v in res[spec].items() if k not in ("seeds", "rewards", "ref_static_px", "ref_dynamic_px")}}), flush=True)
         Path(a.out).parent.mkdir(parents=True, exist_ok=True)
         Path(a.out).write_text(json.dumps(res, indent=1))

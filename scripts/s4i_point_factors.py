@@ -13,11 +13,15 @@ Per cell (dynamic / static separately), over the group's candidates (config A re
   n             anchor-times in V;
   split-half tau  stability of the candidate ranking computed from this cell's points only (random anchor halves);
   tau vs ref    Kendall tau of the cell ranking vs the critic-free alignment reference (static cells vs the static
-                shift, dynamic cells vs the dynamic shift), ONLY for groups whose reference is usable (s4h rule);
-  floor         the best candidate's mean error in the cell (a high floor suggests critic / interface error there,
-                but target residuals mix generation and critic errors, so this is not a critic-reliability truth).
-Also a per-group reliability report: static / dynamic scoring usable if >= 64 anchors with a source measurement and
-source e_i <= 0.15 in that group (fixed rule).
+                shift, dynamic cells vs the dynamic shift); each reference is validated separately (s4_common), and the
+                number of candidates used is reported;
+  min residual  the minimum over the CURRENT candidate set of the cell's mean error. It mixes generation and critic
+                errors and depends on how many candidates there are (24 for cnb theta 10, 8 elsewhere; --max-cands
+                gives a same-size comparison); it is not a critic noise floor.
+Also a per-group source-support report (fixed rules): position support e_i <= 0.15 and e_loc_i <= 0.15; for dynamic
+anchors, displacement support d_i / m_i <= 0.5 where m_i is the anchor's mean relative GT motion over its source-
+visible times, only for m_i >= 0.03 (lower-motion anchors are flagged "low motion": the ratio is unstable); counts and
+time coverage (fraction of the 40 frames in V_src / V) of the supported anchors; usable if >= 64 supported anchors.
 """
 
 from __future__ import annotations
@@ -38,6 +42,9 @@ from anyd4rt.reward_d4rt_gt import RewardParams, reward_d4rt_gt  # noqa: E402
 
 import importlib.util  # noqa: E402
 
+_c = importlib.util.spec_from_file_location("s4_common", ROOT / "scripts" / "s4_common.py")
+s4c = importlib.util.module_from_spec(_c)
+_c.loader.exec_module(s4c)
 _g = importlib.util.spec_from_file_location("s4g", ROOT / "scripts" / "s4g_gate_offline.py")
 s4g = importlib.util.module_from_spec(_g)
 _g.loader.exec_module(s4g)
@@ -60,6 +67,7 @@ def main():
     ap.add_argument("--groups", required=True)
     ap.add_argument("--splits", type=int, default=20)
     ap.add_argument("--min-cell", type=int, default=200, help="cells with fewer anchor-times are listed but not ranked")
+    ap.add_argument("--max-cands", type=int, default=0, help="use only the first N candidates (0 = all)")
     ap.add_argument("--out", default=str(ROOT / "outputs" / "s4h" / "point_factors.json"))
     a = ap.parse_args()
     res = {}
@@ -100,15 +108,17 @@ def main():
             boundary[:, t] = np.nan_to_num(rng_[cy, cx], nan=0.0) > tol
         V = g["V"].astype(bool)
         files = sorted(d.glob("cand_*.npz"))
+        if a.max_cands:
+            files = files[: a.max_cands]
         C = [dict(np.load(f)) for f in files]
         seeds = [int(f.stem.split("_")[1]) for f in files]
         outs = [reward_d4rt_gt(c["pr"], g["Y"], g["V"], 0, P, c["pl"], g["Y_loc"]) for c in C]
         E = np.stack([(o["e"] + np.where(np.isfinite(o["e_loc"]), o["e_loc"], o["e"])) / 2 for o in outs])  # [G,N,T]
         ref_path = d / "alignment_ref.json"
         ref = json.loads(ref_path.read_text()) if ref_path.exists() else {}
-        st_ref = np.array([ref.get(str(s), {}).get("static") or np.nan for s in seeds], dtype=float)
-        dy_ref = np.array([ref.get(str(s), {}).get("dynamic") or np.nan for s in seeds], dtype=float)
-        usable = len(ref) > 0 and int(np.sum(st_ref >= SAT)) <= 2 * len(seeds) / 8
+        st_ref = s4c.ref_values(ref, seeds, "static")
+        dy_ref = s4c.ref_values(ref, seeds, "dynamic")
+        val_st, val_dy = s4c.ref_validity(st_ref), s4c.ref_validity(dy_ref)
         sb = np.broadcast_to(src_bin(e_src)[:, None], V.shape)
         vb_ = view_bin(ang)
         cells = {}
@@ -121,7 +131,7 @@ def main():
                     cell = {"n": n, "n_anchors": int(m.any(1).sum())}
                     if n >= a.min_cell:
                         score = np.array([-(E[k][m].mean()) for k in range(len(C))])
-                        cell["floor_best_candidate_error"] = float(-score.max())
+                        cell["min_residual_current_set"] = float(-score.max())
                         cell["mean_error"] = float(-score.mean())
                         anchors = np.flatnonzero(m.any(1))
                         taus = []
@@ -131,20 +141,41 @@ def main():
                             m1, m2 = m.copy(), m.copy()
                             m1[h2] = False; m2[h1] = False
                             if m1.any() and m2.any():
-                                taus.append(s4g.kendall([-(E[k][m1].mean()) for k in range(len(C))], [-(E[k][m2].mean()) for k in range(len(C))]))
+                                taus.append(s4c.kendall([-(E[k][m1].mean()) for k in range(len(C))], [-(E[k][m2].mean()) for k in range(len(C))])[0])
                         cell["split_half_tau"] = float(np.nanmean(taus)) if taus else None
-                        refv = -st_ref if motion_name == "static" else -dy_ref
-                        cell["tau_vs_ref"] = s4g.kendall(score, refv) if usable else None
+                        tv = s4c.tau_vs_ref(score, st_ref if motion_name == "static" else dy_ref)
+                        cell["tau_vs_ref"], cell["tau_vs_ref_n"] = tv["tau"], tv["n"]
                     cells[f"{motion_name}|src:{s_lab}|view:{v_lab}"] = cell
-        ok_src = rel["src_vis0"] & (np.nan_to_num(e_src, nan=np.inf) <= 0.15)
-        res[name] = {"n_candidates": len(C), "reference_usable": bool(usable),
-                     "reliability": {"static_scoring_usable": bool((ok_src & ~dyn).sum() >= 64), "n_static_reliable": int((ok_src & ~dyn).sum()),
-                                     "dynamic_scoring_usable": bool((ok_src & dyn).sum() >= 64), "n_dynamic_reliable": int((ok_src & dyn).sum()),
-                                     "n_dynamic_anchors": int(dyn.sum()), "n_static_anchors": int((~dyn).sum())},
+        # source-side support (fixed rules)
+        Vs = g["V_src"].astype(bool)
+        nt = (np.arange(Vs.shape[1]) != 0)[None]
+        zbar = np.maximum(g["Y_src"][:, :1, 2], P.z_min)
+        rel_mot = np.linalg.norm(g["Y_src"] - g["Y_src"][:, :1], axis=-1) / zbar
+        md = Vs & nt & Vs[:, :1]
+        m_i = np.where(md.any(1), (rel_mot * md).sum(1) / np.maximum(md.sum(1), 1), np.nan)
+        pos_ok = rel["src_vis0"] & (np.nan_to_num(np.maximum(rel["e_i"], rel["l_i"]), nan=np.inf) <= 0.15)
+        low_motion = dyn & (np.nan_to_num(m_i, nan=0.0) < 0.03)
+        disp_ok = dyn & ~low_motion & rel["src_vis0"] & (np.nan_to_num(rel["d_i"] / np.maximum(m_i, 1e-9), nan=np.inf) <= 0.5)
+        cov = lambda m, VV: float(VV[m].mean()) if m.any() else None  # noqa: E731
+        support = {"static": {"n": int((~dyn).sum()), "n_source_measured": int((rel["src_vis0"] & ~dyn).sum()),
+                              "n_position_supported": int((pos_ok & ~dyn).sum()),
+                              "time_cov_source": cov(pos_ok & ~dyn, Vs), "time_cov_target": cov(pos_ok & ~dyn, V)},
+                   "dynamic": {"n": int(dyn.sum()), "n_source_measured": int((rel["src_vis0"] & dyn).sum()),
+                               "n_position_supported": int((pos_ok & dyn).sum()), "n_low_motion": int(low_motion.sum()),
+                               "n_displacement_supported": int(disp_ok.sum()),
+                               "n_position_and_displacement_supported": int((pos_ok & disp_ok).sum()),
+                               "time_cov_source_pos": cov(pos_ok & dyn, Vs), "time_cov_target_pos": cov(pos_ok & dyn, V),
+                               "time_cov_target_pos_disp": cov(pos_ok & disp_ok, V)}}
+        usable_flags = {"static_position_scoring_usable": support["static"]["n_position_supported"] >= 64,
+                        "dynamic_position_scoring_usable": support["dynamic"]["n_position_supported"] >= 64,
+                        "dynamic_displacement_scoring_usable": support["dynamic"]["n_position_and_displacement_supported"] >= 64}
+        res[name] = {"n_candidates": len(C), "reference_static": val_st, "reference_dynamic": val_dy,
+                     "source_support": support, "usable": usable_flags,
                      "unknown_anchor_times": int(unknown.sum()), "boundary_frac_of_V": float((boundary & V).sum() / V.sum()),
                      "view_angle_deg_pct[10,50,90]": [float(x) for x in np.percentile(ang[V], [10, 50, 90])],
                      "cells": cells}
-        print(json.dumps({"group": name, "reference_usable": usable, **res[name]["reliability"],
+        print(json.dumps({"group": name, "n_cands": len(C), "ref_static_valid": val_st["valid"], "ref_dynamic_valid": val_dy["valid"],
+                          **usable_flags, "support": support,
                           "view_pct": [round(x, 1) for x in res[name]["view_angle_deg_pct[10,50,90]"]], "boundary_frac": round(res[name]["boundary_frac_of_V"], 3)}), flush=True)
         Path(a.out).parent.mkdir(parents=True, exist_ok=True)
         Path(a.out).write_text(json.dumps(res, indent=1, default=float))

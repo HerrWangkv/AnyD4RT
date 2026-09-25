@@ -33,6 +33,12 @@ sys.path.insert(0, str(ROOT))
 
 from anyd4rt.reward_d4rt_gt import RewardParams, reward_d4rt_gt  # noqa: E402
 
+import importlib.util  # noqa: E402
+
+_c = importlib.util.spec_from_file_location("s4_common", ROOT / "scripts" / "s4_common.py")
+s4c = importlib.util.module_from_spec(_c)
+_c.loader.exec_module(s4c)
+
 P = RewardParams()
 VISUAL_PAIRS = {"cnb_dlab_0215_ego2@0_theta10": [[[4, 5], [7], [0, 2, 3, 6]], [[11, 22], [14], [4, 5], [1]]]}
 
@@ -164,8 +170,8 @@ def main():
         else:
             ref = {s: alignment_reference(g, c["video"]) for s, c in zip(seeds, C)}
             ref_path.write_text(json.dumps(ref))
-        ref_static = [-ref[s]["static"] if ref[s]["static"] is not None else np.nan for s in seeds]
-        ref_dyn = [-ref[s]["dynamic"] if ref[s]["dynamic"] is not None else np.nan for s in seeds]
+        ref_static = s4c.ref_values({str(k): v for k, v in ref.items()}, seeds, "static")
+        ref_dyn = s4c.ref_values({str(k): v for k, v in ref.items()}, seeds, "dynamic")
         gr = report["groups"][d.name]
         gr["seeds"] = seeds
         gr["alignment_ref"] = {s: ref[s] for s in seeds}
@@ -211,8 +217,9 @@ def main():
                        "rewards": dict(zip(seeds, rs.tolist())), "order": [seeds[i] for i in np.argsort(-rs)],
                        "terms_mean": {k: float(np.mean([x[k] for x in rows if x[k] is not None])) for k in ("e_mean", "d_mean", "eloc_mean")},
                        "split_half_tau_mean": float(np.nanmean(taus_split)),
-                       "tau_vs_ref_static": kendall(rs, ref_static), "tau_vs_ref_dynamic": kendall(rs, ref_dyn),
-                       "tau_vs_ref_mean": kendall(rs, [np.nanmean([x, y]) for x, y in zip(ref_static, ref_dyn)])}
+                       **{f"tau_vs_ref_{k}": (tv := s4c.tau_vs_ref(rs, vals))["tau"] for k, vals in (("static", ref_static), ("dynamic", ref_dyn))},
+                       **{f"n_tau_{k}": s4c.tau_vs_ref(rs, vals)["n"] for k, vals in (("static", ref_static), ("dynamic", ref_dyn))},
+                       "ref_static_validity": s4c.ref_validity(ref_static), "ref_dynamic_validity": s4c.ref_validity(ref_dyn)}
                 if d.name in VISUAL_PAIRS:
                     pairs = set()
                     for ch in VISUAL_PAIRS[d.name]:
@@ -222,7 +229,7 @@ def main():
                     ent["visual_pairs_agree"] = f"{sum(R[x] > R[y] for x, y in pairs if x in R and y in R)}/{len(pairs)}"
                     ent["rank_of_seed1"] = ent["order"].index(1) + 1
                 gr["configs"][cfg] = ent
-        print(json.dumps({"group": d.name, **{k: {kk: gr["configs"][k][kk] for kk in ("reliable", "n_gated_anchors", "retention_anchors", "split_half_tau_mean", "tau_vs_ref_static", "tau_vs_ref_dynamic") + (("visual_pairs_agree", "rank_of_seed1") if d.name in VISUAL_PAIRS else ())} for k in gr["configs"]}}), flush=True)
+        print(json.dumps({"group": d.name, **{k: {kk: gr["configs"][k][kk] for kk in ("reliable", "n_gated_anchors", "retention_anchors", "split_half_tau_mean", "tau_vs_ref_static", "n_tau_static", "tau_vs_ref_dynamic", "n_tau_dynamic") + (("visual_pairs_agree", "rank_of_seed1") if d.name in VISUAL_PAIRS else ())} for k in gr["configs"]}}), flush=True)
         (out / "report.json").write_text(json.dumps(report, indent=1, default=float))
 
 
