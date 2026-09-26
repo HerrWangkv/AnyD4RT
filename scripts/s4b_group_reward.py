@@ -23,6 +23,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
+from scipy.stats import kendalltau
 
 ROOT = Path(__file__).resolve().parents[1]
 AV = ROOT / "third_party" / "AnyView-DVS"
@@ -60,11 +61,9 @@ def parse_args():
 
 
 def kendall_tau(x, y):
-    n, s = len(x), 0
-    for i in range(n):
-        for j in range(i + 1, n):
-            s += np.sign(x[i] - x[j]) * np.sign(y[i] - y[j])
-    return s / (n * (n - 1) / 2)
+    """Standard Kendall tau-b, including correction for ties."""
+    result = kendalltau(np.asarray(x), np.asarray(y), variant="b", nan_policy="omit")
+    return float(result.statistic) if np.isfinite(result.statistic) else 0.0
 
 
 def predict(model, frames_grid, uv0):

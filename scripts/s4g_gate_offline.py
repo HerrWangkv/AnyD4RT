@@ -2,10 +2,12 @@
 """Offline source-side reliability gating on cached S4 groups (outputs/s4cache/*), configs A-D.
 
 Source reliability (per GT trajectory = anchor): OpenD4RT on the REAL source video (source camera, same grid -> 256
-chain), queries at the anchor's source pixel at t0; ONE scale fit over all source-visible anchors (never refit after
-gating); per-trajectory mean e (over V_src), d and e_loc (over V_src, t != t0). An anchor passes the gate if it is
-GT-visible in the source at t0 and max(e_i, e_loc_i) <= tau and d_i <= tau (one uniform tau per run, --taus).
-The gate is carried to the target view by anchor identity and is the same for every candidate of the group.
+chain), queries at the anchor's source pixel at t0; per-trajectory mean e (over V_src), d and e_loc (over V_src,
+t != t0). Position, displacement, and local-coordinate support are independent. A low-motion dynamic anchor is not
+accepted for displacement merely because it has a small absolute error; it must pass the dynamic motion floor and
+relative-error rule. The masks are fixed before candidate scoring and shared within the group.
+The term-specific support masks are carried to the target view by anchor identity and are the same for every
+candidate of the group; their union is used only for retention/reliability bookkeeping.
 
 Configs:  A no gate + pooled mean   B gate + pooled   C no gate + static/dynamic balance   D gate + balance.
 Group reliability: gated anchors >= --min-anchors (and, for C/D-type balance, both groups >= --min-group or the
@@ -44,13 +46,7 @@ VISUAL_PAIRS = {"cnb_dlab_0215_ego2@0_theta10": [[[4, 5], [7], [0, 2, 3, 6]], [[
 
 
 def kendall(x, y):
-    n, s, c = len(x), 0, 0
-    for i in range(n):
-        for j in range(i + 1, n):
-            a, b = np.sign(x[i] - x[j]), np.sign(y[i] - y[j])
-            if a != 0 and b != 0:
-                s += a * b; c += 1
-    return s / c if c else float("nan")
+    return s4c.kendall(x, y)[0]
 
 
 def norm(v):
@@ -98,7 +94,40 @@ def source_reliability(g):
     e_i = per_traj(o["e"], V)
     d_i = per_traj(o["d"], V & nt & V[:, :1])
     l_i = per_traj(o["e_loc"], V & nt)
-    return {"s": o["s"], "r_source": o["r"], "e_i": e_i, "d_i": d_i, "l_i": l_i, "src_vis0": g["src_vis0"].astype(bool)}
+    return {"s": o["s"], "r_source": o["r"], "e_i": e_i, "d_i": d_i, "l_i": l_i,
+            "m_i": source_motion_means(g), "src_vis0": g["src_vis0"].astype(bool)}
+
+
+def source_motion_means(g):
+    """Mean source-side GT motion per anchor, normalized by the t0 depth."""
+    V = g["V_src"].astype(bool)
+    nt = (np.arange(V.shape[1]) != 0)[None]
+    md = V & nt & V[:, :1]
+    zbar = np.maximum(g["Y_src"][:, :1, 2], P.z_min)
+    motion = np.linalg.norm(g["Y_src"] - g["Y_src"][:, :1], axis=-1) / zbar
+    return np.where(md.any(1), (motion * md).sum(1) / np.maximum(md.sum(1), 1), np.nan)
+
+
+def source_support_masks(g, rel, pos_tau=0.10, loc_tau=0.10, disp_abs_tau=0.10,
+                         disp_ratio=0.5, min_motion=0.03):
+    """Independent source-side support masks for e, d and e_loc.
+
+    Static displacement uses an absolute error threshold. Dynamic displacement
+    requires enough GT motion and then uses a relative error threshold; low-motion
+    dynamic anchors are not silently accepted. The three masks are independent.
+    """
+    src = rel["src_vis0"].astype(bool)
+    e, d, loc = np.asarray(rel["e_i"], float), np.asarray(rel["d_i"], float), np.asarray(rel["l_i"], float)
+    dyn = g["dyn"].astype(bool)
+    motion = np.asarray(rel.get("m_i", source_motion_means(g)), float)
+    pos = src & np.isfinite(e) & (e <= float(pos_tau))
+    local = src & np.isfinite(loc) & (loc <= float(loc_tau))
+    static_d = (~dyn) & np.isfinite(d) & (d <= float(disp_abs_tau))
+    dynamic_d = dyn & np.isfinite(motion) & (motion >= float(min_motion)) & np.isfinite(d) \
+        & (d / np.maximum(motion, 1e-12) <= float(disp_ratio))
+    disp = src & (static_d | dynamic_d)
+    return {"e": pos, "d": disp, "loc": local, "motion": motion,
+            "low_motion_dynamic": dyn & np.isfinite(motion) & (motion < float(min_motion))}
 
 
 def motion_recovery(g, rel, mask_anchor):
@@ -127,6 +156,10 @@ def main():
     ap.add_argument("--taus", default="0.10,0.20")
     ap.add_argument("--min-anchors", type=int, default=128)
     ap.add_argument("--min-group", type=int, default=32)
+    ap.add_argument("--disp-ratio", type=float, default=0.5,
+                    help="dynamic displacement support: d_i / motion_i <= this value")
+    ap.add_argument("--min-motion", type=float, default=0.03,
+                    help="dynamic displacement support motion floor, normalized by t0 depth")
     ap.add_argument("--splits", type=int, default=20)
     ap.add_argument("--groups", default="", help="comma-separated group dir names (default: all)")
     ap.add_argument("--out", default=str(ROOT / "outputs" / "s4g"))
@@ -176,12 +209,15 @@ def main():
         gr["seeds"] = seeds
         gr["alignment_ref"] = {s: ref[s] for s in seeds}
         V = g["V"].astype(bool)
-        gates = {"none": np.ones(len(dyn), bool)}
+        term_supports = {"none": {k: np.ones(len(dyn), bool) for k in ("e", "d", "loc")}}
         for tau in taus:
-            ok = rel["src_vis0"] & (np.nan_to_num(np.maximum(rel["e_i"], rel["l_i"]), nan=np.inf) <= tau) & (np.nan_to_num(rel["d_i"], nan=np.inf) <= tau)
-            gates[f"tau{tau:g}"] = ok
+            support = source_support_masks(g, rel, pos_tau=tau, loc_tau=tau,
+                                           disp_abs_tau=tau, disp_ratio=a.disp_ratio,
+                                           min_motion=a.min_motion)
+            term_supports[f"tau{tau:g}"] = {k: support[k] for k in ("e", "d", "loc")}
         gr["configs"] = {}
-        for gname, gate in gates.items():
+        for gname, term_support in term_supports.items():
+            gate = np.logical_or.reduce([term_support[k] for k in ("e", "d", "loc")])
             for bal in (False, True):
                 cfg = ("A" if not bal else "C") if gname == "none" else (("B" if not bal else "D") + f"_{gname}")
                 Vg = V & gate[:, None]
@@ -192,12 +228,15 @@ def main():
                 bal_note = None
                 if bal and (n_dyn < a.min_group or n_sta < a.min_group):
                     bal_note = f"balance falls back: dyn {n_dyn}, static {n_sta} (< {a.min_group})"
-                b_arr = dyn & gate if bal else None
+                b_arr = dyn if bal else None
                 if bal and bal_note:
                     b_arr = np.zeros_like(dyn) if n_dyn < a.min_group else np.ones_like(dyn)
                 rows = []
+                masks = {k: np.broadcast_to(term_support[k][:, None], V.shape)
+                         for k in ("e", "d", "loc")}
                 for c in C:
-                    o = reward_d4rt_gt(c["pr"], g["Y"], V, 0, P, c["pl"], g["Y_loc"], anchor_gate=gate, balance=b_arr)
+                    o = reward_d4rt_gt(c["pr"], g["Y"], V, 0, P, c["pl"], g["Y_loc"],
+                                       term_masks=masks, scale_mask=V & gate[:, None], balance=b_arr)
                     rows.append({k: o.get(k) for k in ("r", "e_mean", "d_mean", "eloc_mean", "s", "scale_valid")})
                 rs = np.array([x["r"] for x in rows], dtype=float)
                 rng = np.random.default_rng(1)
@@ -209,10 +248,24 @@ def main():
                     rr = []
                     for half in h:
                         m = np.zeros_like(gate); m[half] = True
-                        rr.append([reward_d4rt_gt(c["pr"], g["Y"], V, 0, P, c["pl"], g["Y_loc"], anchor_gate=m, balance=b_arr)["r"] for c in C])
+                        half_masks = {k: np.broadcast_to(term_support[k][:, None] & m[:, None], V.shape)
+                                      for k in ("e", "d", "loc")}
+                        rr.append([reward_d4rt_gt(c["pr"], g["Y"], V, 0, P, c["pl"], g["Y_loc"],
+                                                  term_masks=half_masks, scale_mask=V & m[:, None], balance=b_arr)["r"] for c in C])
                     taus_split.append(kendall(rr[0], rr[1]))
+                term_base = {
+                    "e": V,
+                    "d": V & (np.arange(V.shape[1]) != 0)[None] & V[:, :1],
+                    "loc": V & (np.arange(V.shape[1]) != 0)[None],
+                }
                 ent = {"reliable": reliable, "n_gated_anchors": int(gate.sum()), "n_dyn": n_dyn, "n_static": n_sta, "balance_note": bal_note,
                        "retention_anchors": ret, "retention_V": ret_V,
+                       "term_support": {k: {"anchors": int(term_support[k].sum()),
+                                             "anchor_fraction": float(term_support[k].mean()),
+                                             "V_entries": int((term_base[k] & term_support[k][:, None]).sum()),
+                                             "V_base_entries": int(term_base[k].sum()),
+                                             "V_fraction": float((term_base[k] & term_support[k][:, None]).sum() / max(term_base[k].sum(), 1))}
+                                       for k in ("e", "d", "loc")},
                        "person_frac_of_V_after": float((Vg & person[:, None]).sum() / max(Vg.sum(), 1)) if person.any() else None,
                        "rewards": dict(zip(seeds, rs.tolist())), "order": [seeds[i] for i in np.argsort(-rs)],
                        "terms_mean": {k: float(np.mean([x[k] for x in rows if x[k] is not None])) for k in ("e_mean", "d_mean", "eloc_mean")},

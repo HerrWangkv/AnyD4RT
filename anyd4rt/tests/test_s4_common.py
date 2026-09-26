@@ -29,4 +29,11 @@ def test_kendall_ignores_missing_and_reports_n():
     t, n = c.kendall([1, 2, np.nan, 4], [1, 2, 3, 4])
     assert n == 3 and t == 1.0
     r = c.tau_vs_ref([0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2], np.array([1, 2, 3, 4, 5, 6, 7, np.nan]))
-    assert r["n"] == 7 and r["tau"] == 1.0  # higher reward <-> smaller shift
+    assert r["n"] == 7 and r["tau"] == 1.0 and r["pvalue"] is not None  # higher reward <-> smaller shift
+
+
+def test_kendall_uses_tau_b_with_ties():
+    # The old concordant-pair ratio dropped all tied pairs and returned 1.0.
+    # Standard tau-b applies the tie correction and returns 0.5 here.
+    t, n = c.kendall([1, 1, 2], [1, 2, 2])
+    assert n == 3 and np.isclose(t, 0.5)

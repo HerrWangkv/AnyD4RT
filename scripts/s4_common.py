@@ -10,6 +10,7 @@ Missing values are never treated as unsaturated. Correlations use only the candi
 from __future__ import annotations
 
 import numpy as np
+from scipy.stats import kendalltau
 
 SAT = 30.0          # search range is +-32 px (step 2): >= 30 px counts as saturated
 VALID_FRAC = 0.75   # >= 6 of 8 candidates OK
@@ -35,27 +36,29 @@ def ref_validity(vals: np.ndarray) -> dict:
             "n_saturated": int((np.isfinite(vals) & (vals >= SAT)).sum()), "spread_px": spread, "reason": reason}
 
 
-def kendall(x, y) -> tuple[float, int]:
-    """Kendall tau over the entries where both x and y are finite; returns (tau, n_used). tau is NaN if n < 3."""
+def _kendall_result(x, y) -> tuple[float, int, float]:
+    """Return standard Kendall tau-b, the finite-pair count, and its two-sided p-value."""
     x, y = np.asarray(x, float), np.asarray(y, float)
     m = np.isfinite(x) & np.isfinite(y)
     x, y = x[m], y[m]
     n = len(x)
-    s = c = 0
-    for i in range(n):
-        for j in range(i + 1, n):
-            a, b = np.sign(x[i] - x[j]), np.sign(y[i] - y[j])
-            if a != 0 and b != 0:
-                s += a * b
-                c += 1
-    return (float(s / c) if c and n >= 3 else float("nan")), n
+    if n < 2:
+        return float("nan"), n, float("nan")
+    result = kendalltau(x, y, variant="b", nan_policy="omit")
+    return float(result.statistic), n, float(result.pvalue)
+
+
+def kendall(x, y) -> tuple[float, int]:
+    """Kendall tau-b over entries where both x and y are finite; returns (tau_b, n_used)."""
+    tau, n, _ = _kendall_result(x, y)
+    return tau, n
 
 
 def tau_vs_ref(reward, ref_vals) -> dict:
     """Kendall tau between rewards and a critic-free reference (smaller shift = better), only on OK candidates."""
     v = ref_validity(ref_vals)
     if not v["valid"]:
-        return {"tau": None, "n": 0, "validity": v}
+        return {"tau": None, "pvalue": None, "n": 0, "validity": v}
     ok = np.isfinite(ref_vals) & (ref_vals < SAT)
-    t, n = kendall(np.asarray(reward, float)[ok], -ref_vals[ok])
-    return {"tau": t, "n": n, "validity": v}
+    t, n, p = _kendall_result(np.asarray(reward, float)[ok], -ref_vals[ok])
+    return {"tau": t, "pvalue": p, "n": n, "validity": v}

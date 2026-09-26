@@ -1,6 +1,6 @@
 import numpy as np
 
-from anyd4rt.reward_d4rt_gt import RewardParams, reward_d4rt_gt
+from anyd4rt.reward_d4rt_gt import RewardParams, fit_scale, reward_d4rt_gt
 
 P = RewardParams(z_min=1e-3, c=1.0, n_min=4, kappa=0.5)
 
@@ -161,3 +161,32 @@ def test_balance_equal_weights_static_dynamic():
     assert out["e_mean"] > pooled["e_mean"]  # the minority group now counts for half
     only_static = reward_d4rt_gt(pred, Y, V, t0=0, p=P, balance=np.zeros(64, bool))
     assert np.isclose(only_static["e_mean"], pooled["e_mean"])  # one empty group -> plain mean
+
+
+def test_term_masks_are_independent():
+    Y, Y_loc, V = _static_scene_moving_camera(n=64)
+    pred = Y.copy()
+    pred[:8, 1:] += 1.0
+    masks = {"e": V.copy(), "d": V.copy(), "loc": V.copy()}
+    masks["e"][:8] = False
+    masks["loc"][8:16] = False
+    out = reward_d4rt_gt(pred, Y, V, t0=0, p=P, pred_loc=Y_loc.copy(), Y_loc=Y_loc, term_masks=masks)
+    assert out["n_Ve"] == int(masks["e"].sum())
+    assert out["n_Vloc"] == int((masks["loc"] & (np.arange(V.shape[1]) != 0)[None]).sum())
+    assert out["n_Vd"] == int((masks["d"] & (np.arange(V.shape[1]) != 0)[None] & V[:, :1]).sum())
+    # Excluding an anchor from e must not remove it from displacement.
+    full_d = reward_d4rt_gt(pred, Y, V, t0=0, p=P, pred_loc=Y_loc.copy(), Y_loc=Y_loc)
+    assert out["d_mean"] == full_d["d_mean"]
+
+
+def test_fixed_scale_reuses_unfiltered_calibration():
+    Y, V = _scene()
+    pred = Y / 2.5
+    fit = fit_scale(pred, Y, V, 0, P)
+    subset = np.ones(len(Y), bool)
+    subset[:16] = False
+    masks = {k: V & subset[:, None] for k in ("e", "d", "loc")}
+    out = reward_d4rt_gt(pred, Y, V, t0=0, p=P, term_masks=masks,
+                         scale_mask=V, scale_override=fit["s"])
+    assert fit["scale_valid"] and abs(fit["s"] - 2.5) < 1e-9
+    assert abs(out["s"] - fit["s"]) < 1e-9 and abs(out["r"]) < 1e-9
