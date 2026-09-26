@@ -41,6 +41,20 @@ from src.data.dynamic_replica_raw_dataset import _viewpoint_to_camera  # noqa: E
 
 T_D4RT = 40
 P = RewardParams()
+MOTION_THRESHOLD = 0.02
+LOCKED_THRESHOLDS = {
+    "pos_tau": 0.05,
+    "loc_tau": 0.05,
+    "disp_abs_tau": 0.10,
+    "disp_ratio": 0.25,
+    "min_motion": 0.03,
+    "angle_deg_e": 1.0,
+    "angle_deg_d": 1.0,
+    "angle_deg_loc": 1.5,
+    "tune_rule": "locked from the 3cdaf61 calibration report; no target-side threshold tuning in this run",
+    "min_tune_coverage": 0.25,
+    "tables": {},
+}
 
 
 def _annotation_path(root: Path, split: str) -> Path:
@@ -132,6 +146,34 @@ def _depth_visibility(depth: np.ndarray, px: np.ndarray, z: np.ndarray) -> np.nd
     return ok & np.isfinite(sampled) & (sampled > 0) & (np.abs(sampled - z) <= tol)
 
 
+def _fixed_frame_motion(T_cw: np.ndarray, X_world: np.ndarray,
+                        visible: np.ndarray | None = None) -> np.ndarray:
+    """Relative motion in the left camera at t0, never in a moving camera frame.
+
+    ``X_world`` keeps physical point identities fixed across time.  Using the
+    first camera for every frame removes camera motion from the dynamic label.
+    When visibility is supplied, the same visible-frame reduction is used for
+    sampling and for the final labels.
+    """
+    X_t0_cam = _world_to_cam(T_cw[:1], X_world)  # [T,N,3], fixed t0 camera
+    zbar = np.maximum(X_t0_cam[0, :, 2], P.z_min)
+    motion_rel = np.linalg.norm(X_t0_cam - X_t0_cam[:1], axis=-1) / zbar[None, :]
+    if visible is not None:
+        # Avoid ``nanmax`` on all-NaN columns: points with no visible frame
+        # are not eligible for sampling, but should not emit a warning while
+        # their motion value is reduced.
+        out = np.full(X_world.shape[1], np.nan, dtype=np.float32)
+        valid_columns = visible.any(axis=0)
+        if valid_columns.any():
+            with np.errstate(invalid="ignore"):
+                out[valid_columns] = np.nanmax(
+                    np.where(visible[:, valid_columns], motion_rel[:, valid_columns], np.nan),
+                    axis=0,
+                )
+        return out
+    return np.nanmax(motion_rel, axis=0)
+
+
 def _load_clip(root: Path, split: str, scene: str, start: int, stride: int,
                annotations: dict[str, dict[str, dict[int, dict]]], num_points: int,
                seed: int) -> dict:
@@ -210,16 +252,18 @@ def _load_clip(root: Path, split: str, scene: str, start: int, stride: int,
     rng = np.random.default_rng(seed)
     common_t0 = visible["left"][0] & visible["right"][0]
     ids = np.flatnonzero(common_t0)
+    motion_all = _fixed_frame_motion(T_cw["left"], X, visible["left"])
+    dynamic_all = motion_all > MOTION_THRESHOLD
+    available_dynamic = int((dynamic_all[ids]).sum())
+    available_static = int((~dynamic_all[ids]).sum())
     if ids.size < num_points:
         chosen = ids
     else:
         # Balance dynamic/static points using the source GT motion. This label
         # is computed before any D4RT prediction and is not a learned signal.
-        y_src_all = X_cam["left"]
-        zbar = np.maximum(y_src_all[0, :, 2], P.z_min)
-        motion = np.linalg.norm(y_src_all - y_src_all[:1], axis=-1).max(axis=0) / zbar
-        dynamic = motion > 0.02
-        dyn_ids, sta_ids = ids[dynamic[ids]], ids[~dynamic[ids]]
+        # It uses the fixed t0 camera, so camera motion is not mistaken for
+        # object motion.
+        dyn_ids, sta_ids = ids[dynamic_all[ids]], ids[~dynamic_all[ids]]
         n_dyn = min(len(dyn_ids), num_points // 2)
         n_sta = min(len(sta_ids), num_points - n_dyn)
         chosen = np.concatenate([
@@ -248,9 +292,12 @@ def _load_clip(root: Path, split: str, scene: str, start: int, stride: int,
     for view in ("left", "right"):
         y[view] = _world_to_cam(T_cw[view][:1], X).transpose(1, 0, 2)
         y_loc[view] = _world_to_cam(T_cw[view], X).transpose(1, 0, 2)
-    zbar = np.maximum(y["left"][:, 0, 2], P.z_min)
-    motion_rel = np.linalg.norm(y["left"] - y["left"][:, :1], axis=-1) / zbar[:, None]
-    dynamic = np.nanmax(np.where(visible["left"].T, motion_rel, np.nan), axis=1) > 0.02
+    motion = _fixed_frame_motion(T_cw["left"], X, visible["left"])
+    dynamic = motion > MOTION_THRESHOLD
+    if not np.array_equal(dynamic, dynamic_all[chosen]):
+        raise RuntimeError(f"inconsistent dynamic labels after sampling: {scene}")
+    sampled_dynamic = int(dynamic.sum())
+    sampled_static = int((~dynamic).sum())
 
     return {
         "scene": scene, "split": split, "start": int(start), "stride": int(stride),
@@ -260,6 +307,14 @@ def _load_clip(root: Path, split: str, scene: str, start: int, stride: int,
         "source_depth_rel_median": float(np.median(depth_err)) if depth_err.size else None,
         "source_depth_rel_p90": float(np.percentile(depth_err, 90)) if depth_err.size else None,
         "n_points": int(len(chosen)), "n_common_t0": int(common_t0[chosen].sum()),
+        "sampling": {
+            "motion_definition": "world trajectory evaluated in fixed left t0 camera",
+            "motion_threshold": MOTION_THRESHOLD,
+            "available_common_t0_dynamic": available_dynamic,
+            "available_common_t0_static": available_static,
+            "sampled_dynamic": sampled_dynamic,
+            "sampled_static": sampled_static,
+        },
     }
 
 
@@ -351,6 +406,18 @@ def _term_stats(err: np.ndarray, mask: np.ndarray, base: np.ndarray, dynamic: np
     values = err[mask]
     anchors = mask.any(1)
     per = _per_anchor(err, mask)
+
+    def group_stats(group: np.ndarray) -> dict:
+        group_mask = mask & group[:, None]
+        group_per = per[group & anchors]
+        group_values = err[group_mask]
+        return {
+            "entries": int(group_mask.sum()),
+            "anchors": int((anchors & group).sum()),
+            "mean_entry": float(group_values.mean()) if group_values.size else None,
+            "mean_anchor": float(np.nanmean(group_per)) if np.isfinite(group_per).any() else None,
+        }
+
     return {
         "mean_entry": float(values.mean()) if values.size else None,
         "median_entry": float(np.median(values)) if values.size else None,
@@ -362,23 +429,177 @@ def _term_stats(err: np.ndarray, mask: np.ndarray, base: np.ndarray, dynamic: np
         "anchor_coverage": float(anchors.sum() / max(base.any(1).sum(), 1)),
         "dynamic_anchor_coverage": float(anchors[dynamic].sum() / max(base.any(1)[dynamic].sum(), 1)) if dynamic.any() else None,
         "static_anchor_coverage": float(anchors[~dynamic].sum() / max(base.any(1)[~dynamic].sum(), 1)) if (~dynamic).any() else None,
+        "dynamic": group_stats(dynamic),
+        "static": group_stats(~dynamic),
     }
+
+
+def _group_summary(err: np.ndarray, mask: np.ndarray, dynamic: np.ndarray) -> dict:
+    """Summarize entries and per-anchor means without treating entries as iid."""
+    anchor = mask.any(1)
+    values = err[mask]
+    per_anchor = _per_anchor(err, mask)
+
+    def one(group: np.ndarray) -> dict:
+        group_mask = mask & group[:, None]
+        group_values = err[group_mask]
+        group_per = per_anchor[group & anchor]
+        return {
+            "entries": int(group_mask.sum()),
+            "anchors": int((anchor & group).sum()),
+            "mean_entry": float(group_values.mean()) if group_values.size else None,
+            "mean_anchor": float(np.nanmean(group_per)) if np.isfinite(group_per).any() else None,
+        }
+
+    return {
+        "entries": int(mask.sum()),
+        "anchors": int(anchor.sum()),
+        "mean_entry": float(values.mean()) if values.size else None,
+        "mean_anchor": float(np.nanmean(per_anchor)) if np.isfinite(per_anchor).any() else None,
+        "dynamic": one(dynamic),
+        "static": one(~dynamic),
+    }
+
+
+def _time_count_summary(mask: np.ndarray, dynamic: np.ndarray) -> dict:
+    anchor = mask.any(1)
+    counts = mask.sum(1).astype(int)
+
+    def one(group: np.ndarray) -> dict:
+        values = counts[anchor & group]
+        return {
+            "anchors": int(values.size),
+            "entries": int(values.sum()),
+            "mean": float(values.mean()) if values.size else None,
+            "min": int(values.min()) if values.size else None,
+            "max": int(values.max()) if values.size else None,
+        }
+
+    return {"overall": one(np.ones_like(dynamic, bool)),
+            "dynamic": one(dynamic), "static": one(~dynamic)}
+
+
+def _time_count_signature(mask: np.ndarray, dynamic: np.ndarray) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """Return the exact per-anchor valid-time multisets for both strata."""
+    anchor = mask.any(1)
+    counts = mask.sum(1).astype(int)
+    return (
+        tuple(sorted(int(value) for value in counts[anchor & dynamic])),
+        tuple(sorted(int(value) for value in counts[anchor & ~dynamic])),
+    )
+
+
+def _matched_random_mask(selected: np.ndarray, base: np.ndarray, dynamic: np.ndarray,
+                         rng: np.random.Generator, attempts: int = 32) -> np.ndarray | None:
+    """Sample a mask with the selected dynamic/static anchor and time counts.
+
+    ``base`` defines the pool (N or S). Each sampled anchor receives exactly
+    one of the selected per-anchor valid-time counts, within its stratum. This
+    makes the control sensitive to point selection rather than to a different
+    dynamic/static mix or a different temporal support pattern.
+    """
+    selected_anchor = selected.any(1)
+    selected_counts = selected.sum(1).astype(int)
+    result = np.zeros_like(selected, bool)
+    for _ in range(attempts):
+        result.fill(False)
+        failed = False
+        for is_dynamic in (True, False):
+            requested = sorted(
+                (int(selected_counts[i]) for i in np.flatnonzero(selected_anchor & (dynamic == is_dynamic))),
+                reverse=True,
+            )
+            available = list(np.flatnonzero(base.any(1) & (dynamic == is_dynamic)))
+            if len(requested) > len(available):
+                failed = True
+                break
+            for count in requested:
+                capacities = np.asarray([int(base[i].sum()) for i in available], dtype=int)
+                eligible = np.flatnonzero(capacities >= count)
+                if eligible.size == 0:
+                    failed = True
+                    break
+                # Use the smallest sufficient pool first, preserving anchors
+                # with long trajectories for larger requested counts.
+                min_capacity = capacities[eligible].min()
+                eligible = eligible[capacities[eligible] == min_capacity]
+                slot = int(rng.choice(eligible))
+                anchor_id = available.pop(slot)
+                times = np.flatnonzero(base[anchor_id])
+                chosen_times = rng.choice(times, size=count, replace=False)
+                result[anchor_id, chosen_times] = True
+            if failed:
+                break
+        if not failed:
+            return result.copy()
+    return None
 
 
 def _random_equal_coverage(err: np.ndarray, selected: np.ndarray, base: np.ndarray,
                            dynamic: np.ndarray, rng: np.random.Generator, draws: int = 100) -> dict:
-    eligible = np.flatnonzero(base.any(1))
-    chosen = np.flatnonzero(selected.any(1))
-    if chosen.size == 0 or chosen.size > eligible.size:
-        return {"n_anchors": int(chosen.size), "mean_entry": None, "std_mean_entry": None}
-    vals = []
+    selected_anchor = selected.any(1)
+    selected_summary = _group_summary(err, selected, dynamic)
+    selected_time = _time_count_summary(selected, dynamic)
+    selected_time_signature = _time_count_signature(selected, dynamic)
+    summaries, time_summaries = [], []
+    time_signatures = []
     for _ in range(draws):
-        pick = rng.choice(eligible, size=chosen.size, replace=False)
-        keep = np.zeros(err.shape[0], bool); keep[pick] = True
-        vals.append(float(err[base & keep[:, None]].mean()) if (base & keep[:, None]).any() else np.nan)
-    return {"n_anchors": int(chosen.size), "mean_entry": float(np.nanmean(vals)),
-            "std_mean_entry": float(np.nanstd(vals, ddof=1)) if len(vals) > 1 else None,
-            "draws": draws}
+        mask = _matched_random_mask(selected, base, dynamic, rng)
+        if mask is None:
+            continue
+        summaries.append(_group_summary(err, mask, dynamic))
+        time_summaries.append(_time_count_summary(mask, dynamic))
+        time_signatures.append(_time_count_signature(mask, dynamic))
+
+    def collect(path: tuple[str, ...]) -> dict:
+        values = []
+        for summary in summaries:
+            value = summary
+            for key in path:
+                value = value[key]
+            if value is not None:
+                values.append(float(value))
+        return {"mean": float(np.mean(values)) if values else None,
+                "std": float(np.std(values, ddof=1)) if len(values) > 1 else None}
+
+    matched_entries = [summary["entries"] for summary in summaries]
+    return {
+        "n_anchors": int(selected_anchor.sum()),
+        "n_dynamic_anchors": int((selected_anchor & dynamic).sum()),
+        "n_static_anchors": int((selected_anchor & ~dynamic).sum()),
+        "selected": selected_summary,
+        "selected_time_counts": selected_time,
+        "mean_entry": collect(("mean_entry",))["mean"],
+        "std_mean_entry": collect(("mean_entry",))["std"],
+        "mean_anchor": collect(("mean_anchor",))["mean"],
+        "std_mean_anchor": collect(("mean_anchor",))["std"],
+        "dynamic": {
+            "mean_entry": collect(("dynamic", "mean_entry"))["mean"],
+            "std_mean_entry": collect(("dynamic", "mean_entry"))["std"],
+            "mean_anchor": collect(("dynamic", "mean_anchor"))["mean"],
+            "std_mean_anchor": collect(("dynamic", "mean_anchor"))["std"],
+        },
+        "static": {
+            "mean_entry": collect(("static", "mean_entry"))["mean"],
+            "std_mean_entry": collect(("static", "mean_entry"))["std"],
+            "mean_anchor": collect(("static", "mean_anchor"))["mean"],
+            "std_mean_anchor": collect(("static", "mean_anchor"))["std"],
+        },
+        "matched_time_counts": time_summaries[0] if time_summaries else None,
+        "matched_entries_min_max": [int(min(matched_entries)), int(max(matched_entries))] if matched_entries else None,
+        "successful_draws": len(summaries),
+        "failed_draws": draws - len(summaries),
+        "exact_time_count_match": bool(
+            len(summaries) == draws and all(
+                summary["entries"] == selected_summary["entries"] and
+                summary["dynamic"]["entries"] == selected_summary["dynamic"]["entries"] and
+                summary["static"]["entries"] == selected_summary["static"]["entries"] and
+                signature == selected_time_signature
+                for summary, signature in zip(summaries, time_signatures)
+            )
+        ),
+        "draws": draws,
+    }
 
 
 def _selected_stats(target: dict, clip: dict, support: dict, config: str,
@@ -448,6 +669,7 @@ def _aggregate_clips(clip_results: list[dict], pos_tau: float, loc_tau: float,
         support = _source_support(clip["source"], clip["dynamic"], pos_tau, loc_tau, disp_abs_tau, disp_ratio, min_motion)
         row = {"scene": clip["scene"], "split": clip["split"], "start": clip["start"],
                "n_points": clip["n_points"], "n_common_t0": clip["n_common_t0"],
+               "sampling": clip["sampling"],
                "view_angle_deg_percentiles": [float(x) for x in np.percentile(
                    clip["view_angle"][clip["visible"]["left"].T & clip["visible"]["right"].T],
                    [0, 25, 50, 75, 90, 95, 99, 100],
@@ -556,6 +778,8 @@ def main():
     ap.add_argument("--default-disp-abs-tau", type=float, default=0.10)
     ap.add_argument("--default-disp-ratio", type=float, default=0.50)
     ap.add_argument("--default-min-motion", type=float, default=0.03)
+    ap.add_argument("--fixed-thresholds", action="store_true",
+                    help="use the thresholds from the 3cdaf61 report instead of tuning on --tune-scenes")
     ap.add_argument("--exp-dir", default=str(ROOT / "third_party/Open-d4rt/checkpoints/OpenD4RT_48CLIP_9Mix_NoCropAUG"))
     ap.add_argument("--out", default=str(ROOT / "outputs" / "dynamic_replica_stereo" / "report.json"))
     args = ap.parse_args()
@@ -578,9 +802,11 @@ def main():
         clip["source"], clip["target"] = pred["left"], pred["right"]
         tune_clips.append(clip)
         print(json.dumps({"split": args.tune_split, "scene": scene, "n_points": clip["n_points"],
+                          "sampled_dynamic": clip["sampling"]["sampled_dynamic"],
+                          "sampled_static": clip["sampling"]["sampled_static"],
                           "source_reprojection_median_px": clip["source_reprojection_median_px"],
                           "source_depth_rel_median": clip["source_depth_rel_median"]}), flush=True)
-    thresholds = _tune_thresholds(tune_clips, args)
+    thresholds = dict(LOCKED_THRESHOLDS) if args.fixed_thresholds else _tune_thresholds(tune_clips, args)
     angle_thresholds = {"e": thresholds["angle_deg_e"], "d": thresholds["angle_deg_d"], "loc": thresholds["angle_deg_loc"]}
 
     report_clips = []
@@ -590,6 +816,8 @@ def main():
         clip["source"], clip["target"] = pred["left"], pred["right"]
         report_clips.append(clip)
         print(json.dumps({"split": args.report_split, "scene": scene, "n_points": clip["n_points"],
+                          "sampled_dynamic": clip["sampling"]["sampled_dynamic"],
+                          "sampled_static": clip["sampling"]["sampled_static"],
                           "source_reprojection_median_px": clip["source_reprojection_median_px"],
                           "source_depth_rel_median": clip["source_depth_rel_median"]}), flush=True)
 
@@ -615,8 +843,14 @@ def main():
                                             angle_thresholds, args.seed + 300),
         "interpretation": {
             "source_filter_uses_target_prediction_or_error": False,
-            "target_gt_used_for": "evaluation and threshold selection on tune split only",
-            "same_coverage_control": "N random anchor subsets matched to each filtered term's retained anchor count",
+            "target_gt_used_for": (
+                "evaluation only; thresholds loaded from the locked 3cdaf61 calibration"
+                if args.fixed_thresholds else
+                "evaluation and threshold selection on tune split only"
+            ),
+            "primary_configs": ["N", "S"],
+            "angle_config": "SV is reported as an analysis-only view-angle stratification, not a required gate",
+            "same_coverage_control": "random controls match dynamic/static anchor counts and each retained anchor's effective time count within the eligible N or S pool",
             "no_formal_training": True,
         },
     }
